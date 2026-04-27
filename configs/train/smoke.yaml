@@ -1,0 +1,21 @@
+label: smoke
+
+stage_a_steps: 6
+stage_b_steps: 8
+stage_c_steps: 4
+
+batch_size: 32
+eval_batch_size: 64
+eval_transport_samples: 128
+eval_transport_steps: 20
+eval_intermediate_empirical_w2: true
+eval_intermediate_ot_samples: 96
+
+lr_g: 0.001
+lr_v: 0.001
+
+alpha: 1.0
+beta: 0.05
+rho: 5.0
+eta_joint: 0.05
+lambda_clip: 100.0

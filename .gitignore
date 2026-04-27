@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+outputs/
+.cache/
+.mplconfig/
+FM/
+
+# LaTeX build artifacts
+*.aux
+*.log
+missfont.log

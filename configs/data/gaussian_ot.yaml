@@ -1,0 +1,14 @@
+label: gaussian_ot
+coupling: ot
+
+dim: 2
+mean0: [0.0, 0.0]
+cov0:
+  - [1.00, 0.30]
+  - [0.30, 0.80]
+mean1: [2.0, -1.0]
+cov1:
+  - [0.70, -0.20]
+  - [-0.20, 1.20]
+kappa: 0.8
+constraint_times: [0.25, 0.50, 0.75]

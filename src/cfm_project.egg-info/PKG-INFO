@@ -1,0 +1,57 @@
+Metadata-Version: 2.4
+Name: cfm-project
+Version: 0.1.0
+Summary: Constrained Flow Matching v1 with moment-constrained path learning.
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: hydra-core<2.0.0,>=1.3.2
+Requires-Dist: matplotlib<4.0.0,>=3.9.0
+Requires-Dist: numpy<3.0.0,>=2.0.0
+Requires-Dist: scipy<2.0.0,>=1.14.0
+Requires-Dist: torch<3.0.0,>=2.4.0
+Provides-Extra: dev
+Requires-Dist: pytest<9.0.0,>=8.3.0; extra == "dev"
+
+# PROJECT_STATE.md
+
+## Purpose
+Append-only hybrid project log for implementation history, decisions, risks, and next steps.
+Use this file to preserve continuity across sessions.
+
+## Repository Boundary
+`FM/` is environment tooling (Python virtual environment), not project source architecture.
+Do not log `FM/` internals as product architecture work.
+
+## Logging Rules
+- Add a new dated entry for each meaningful change session.
+- Keep older entries unchanged; append new entries at the top under "Entries".
+- For small non-architectural edits, include a short note and state why architecture was unchanged.
+- Include clear next actions to maintain momentum.
+
+## Entry Template
+```md
+## [YYYY-MM-DD] <short title>
+- What changed:
+- Why (decision/rationale):
+- Impact or risk:
+- Architecture updates:
+- Validation status:
+- Next steps:
+```
+
+## Entries
+## [2026-04-26] Implemented constrained flow-matching v1 pipeline
+- What changed: Added full `src/`, `configs/`, `scripts/`, and `tests/` implementation for baseline and constrained CFM, including exact discrete OT pairing, analytic Gaussian moment targets, augmented-Lagrangian constrained path training, and stage A/B/C optimization.
+- Why (decision/rationale): Needed a decision-complete v1 implementation matching the selected method: endpoint-preserving path correction with explicit moment constraints and CPU-first reproducibility.
+- Impact or risk: Enables immediate experiments and ablations; main risk is computational overhead from exact OT and higher-order autograd terms in constrained training.
+- Architecture updates: Filled `ARCHITECTURE.md` with mathematical formulation, module map, and training flow; added `DISCUSSION.md` for alternatives and tradeoffs; updated `AGENTS.md` to enforce `DISCUSSION.md` maintenance.
+- Validation status: Added unit tests for path/velocity math, moment features, AL updates, OT sanity, and smoke training tests for baseline and constrained modes.
+- Next steps: Install dependencies, run full test suite, execute `experiment=comparison` benchmark, and inspect whether constrained mode reduces intermediate-time residuals against baseline.
+
+## [2026-04-26] Documentation governance bootstrap
+- What changed: Created `AGENTS.md`, `ARCHITECTURE.md`, and `PROJECT_STATE.md` at repository root to establish documentation governance.
+- Why (decision/rationale): Need durable project memory and a consistent process contract before feature implementation begins.
+- Impact or risk: Improves onboarding and continuity; low risk, but requires discipline to keep docs current.
+- Architecture updates: Initialized `ARCHITECTURE.md` template and marked `FM/` as non-architectural environment tooling.
+- Validation status: Documentation files created and reviewed for required sections and policy alignment.
+- Next steps: Fill project-specific architecture content after project context is provided; start first implementation entry in this log.

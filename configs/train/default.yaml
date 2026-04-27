@@ -1,0 +1,21 @@
+label: default
+
+stage_a_steps: 200
+stage_b_steps: 300
+stage_c_steps: 100
+
+batch_size: 128
+eval_batch_size: 1024
+eval_transport_samples: 2000
+eval_transport_steps: 100
+eval_intermediate_empirical_w2: true
+eval_intermediate_ot_samples: 256
+
+lr_g: 0.001
+lr_v: 0.001
+
+alpha: 1.0
+beta: 0.05
+rho: 5.0
+eta_joint: 0.05
+lambda_clip: 100.0

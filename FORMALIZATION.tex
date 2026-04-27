@@ -1,0 +1,530 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools,bm}
+\usepackage{booktabs}
+
+\title{Formalization of Constrained Flow Matching v1}
+\author{Project Notes}
+\date{April 27, 2026}
+
+\begin{document}
+\maketitle
+
+\section{Goal and Setting}
+We want to learn a velocity field that transports $p_0$ to $p_1$, while enforcing intermediate-time moment constraints.
+In v1, the state is $x \in \mathbb{R}^2$.
+
+\paragraph{Given}
+\begin{itemize}
+    \item Initial and terminal marginals $p_0, p_1$.
+    \item A coupling over endpoint pairs $(x_0, x_1)$ (configured as exact discrete OT or random permutation per batch).
+    \item Constraint times $\mathcal{T}_c = \{0.25, 0.5, 0.75\}$.
+    \item Target moments $m_k$ at each $t_k \in \mathcal{T}_c$.
+\end{itemize}
+
+\paragraph{Wanted}
+Learn:
+\begin{itemize}
+    \item a path-correction model $g_\theta(t,x_0,x_1)$,
+    \item a velocity model $v_\psi(t,x)$,
+\end{itemize}
+such that induced paths satisfy moment constraints and $v_\psi$ matches path velocities.
+
+\section{Reference: Standard CFM}
+Standard conditional flow matching uses a fixed interpolation path $x_t$ (often linear) and target velocity $u_t = \partial_t x_t$, then trains
+\[
+\mathcal{L}_{\mathrm{CFM}}(\psi)
+=
+\mathbb{E}_{(x_0,x_1),\,t}
+\left[
+\left\|
+v_\psi(t,x_t) - u_t
+\right\|^2
+\right].
+\]
+
+\section{Path Family Used in This Project}
+\subsection{Baseline Path}
+\[
+\ell_t(x_0,x_1) = (1-t)x_0 + tx_1.
+\]
+
+\subsection{Constrained-Correction Path}
+We use an endpoint-preserving correction:
+\[
+x_t = \ell_t + a(t)\, g_\theta(t,x_0,x_1),
+\qquad
+a(t)=t(1-t).
+\]
+Because $a(0)=a(1)=0$, endpoints are exactly preserved: $x_{t=0}=x_0$, $x_{t=1}=x_1$.
+
+\subsection{Target Velocity for CFM in Constrained Mode}
+\[
+u_t = \partial_t x_t
+=
+(x_1-x_0)
++ (1-2t)\,g_\theta(t,x_0,x_1)
++ a(t)\,\partial_t g_\theta(t,x_0,x_1).
+\]
+This is exactly what is computed in code using autograd for $\partial_t g_\theta$.
+
+\section{Moment Constraints}
+\subsection{Feature Map Used in v1}
+For a batch $\{x^{(i)}\}_{i=1}^B \subset \mathbb{R}^2$:
+\[
+\hat{\mu} = \frac{1}{B}\sum_{i=1}^B x^{(i)},
+\qquad
+\hat{\Sigma} = \frac{1}{B}\sum_{i=1}^B
+\big(x^{(i)}-\hat{\mu}\big)\big(x^{(i)}-\hat{\mu}\big)^\top.
+\]
+Define
+\[
+\phi(\{x^{(i)}\}_{i=1}^B)
+=
+\begin{bmatrix}
+\hat{\mu} \\
+\mathrm{vec}(\hat{\Sigma})
+\end{bmatrix}
+\in \mathbb{R}^{6}.
+\]
+
+\subsection{Residual at Constraint Times}
+For each $t_k \in \mathcal{T}_c$:
+\[
+c_k(\theta) = \phi\!\left(\{x_{t_k}^{(i)}(\theta)\}_{i=1}^B\right) - m_k.
+\]
+Small $\|c_k\|$ means constraints are well satisfied.
+
+\section{How Target Moments $m_k$ are Built in v1}
+In the benchmark, $(p_0,p_1)$ are Gaussians:
+\[
+p_0=\mathcal{N}(\mu_0,\Sigma_0), \qquad p_1=\mathcal{N}(\mu_1,\Sigma_1).
+\]
+Define the Gaussian OT map matrix:
+\[
+A
+=
+\Sigma_0^{-1/2}
+\left(
+\Sigma_0^{1/2}\Sigma_1\Sigma_0^{1/2}
+\right)^{1/2}
+\Sigma_0^{-1/2}.
+\]
+Define
+\[
+B_t=(1-t)I+tA,
+\qquad
+s(t)=1+\kappa\,t(1-t).
+\]
+Then target mean/covariance are:
+\[
+\mu_t = (1-t)\mu_0 + t\mu_1,
+\qquad
+\Sigma_t = s(t)^2\, B_t \Sigma_0 B_t^\top.
+\]
+Finally:
+\[
+m_k
+=
+\begin{bmatrix}
+\mu_{t_k}\\
+\mathrm{vec}(\Sigma_{t_k})
+\end{bmatrix}.
+\]
+
+\section{Loss Terms Used in the Current Implementation}
+\subsection{Path Regularizer}
+\[
+R(\theta)
+=
+\alpha\,
+\mathbb{E}\!\left[\|u_t-(x_1-x_0)\|^2\right]
++\beta\,
+\mathbb{E}\!\left[\|\partial_t u_t\|^2\right].
+\]
+
+\paragraph{Interpretation}
+\begin{itemize}
+    \item First term keeps the learned path velocity near linear transport velocity.
+    \item Second term penalizes rapid temporal variation of velocity (temporal smoothness).
+\end{itemize}
+
+\subsection{Augmented Lagrangian for Path Learning (Stage A/C)}
+\[
+\mathcal{L}_g(\theta,\lambda)
+=
+R(\theta)
++ \sum_{k}\lambda_k^\top c_k(\theta)
++ \frac{\rho}{2}\sum_k \|c_k(\theta)\|^2.
+\]
+Multiplier updates (with clipping in code):
+\[
+\lambda_k \leftarrow
+\mathrm{clip}\!\left(\lambda_k + \rho\,c_k(\theta),\,-\lambda_{\max},\,\lambda_{\max}\right).
+\]
+
+\subsubsection*{Algorithm 1: Mini-batch augmented-Lagrangian updates (code-equivalent)}
+\textbf{Inputs:} constraint times $\mathcal{T}_c$, target features $\{m_k\}_{t_k\in\mathcal{T}_c}$, hyperparameters $(\alpha,\beta,\rho,\eta_{\mathrm{joint}},\lambda_{\max})$, and step counts $(N_A,N_B,N_C)$.
+
+\begin{enumerate}
+    \item Initialize multipliers: $\lambda_k \gets 0$ for all $t_k\in\mathcal{T}_c$.
+    \item \textbf{Stage A (optimize $\theta$ only):} for $s=1,\dots,N_A$:
+    \begin{enumerate}
+        \item Sample paired mini-batch $\{(x_0^{(i)},x_1^{(i)})\}_{i=1}^B$.
+        \item Sample $t^{(i)}\sim\mathrm{Uniform}(0,1)$ and compute constrained velocity targets $u_{t^{(i)}}(\theta)$.
+        \item Compute regularizer
+        \[
+        R(\theta)\gets
+        \alpha\,\frac{1}{B}\sum_i\|u_{t^{(i)}}-(x_1^{(i)}-x_0^{(i)})\|_2^2
+        +\beta\,\frac{1}{B}\sum_i\|\partial_t u_{t^{(i)}}\|_2^2.
+        \]
+        \item For each $t_k\in\mathcal{T}_c$, compute
+        \[
+        x_{t_k}^{(i)}\gets
+        (1-t_k)x_0^{(i)}+t_kx_1^{(i)}+t_k(1-t_k)\,g_\theta(t_k,x_0^{(i)},x_1^{(i)}),
+        \]
+        \[
+        \hat{\mu}_k\gets \frac{1}{B}\sum_i x_{t_k}^{(i)},\qquad
+        \hat{\Sigma}_k\gets \frac{1}{B}\sum_i(x_{t_k}^{(i)}-\hat{\mu}_k)(x_{t_k}^{(i)}-\hat{\mu}_k)^\top,
+        \]
+        \[
+        c_k(\theta)\gets
+        \begin{bmatrix}
+        \hat{\mu}_k\\
+        \mathrm{vec}(\hat{\Sigma}_k)
+        \end{bmatrix}
+        -m_k.
+        \]
+        \item Assemble AL objective
+        \[
+        \mathcal{L}_g\gets
+        R(\theta)+\sum_k\lambda_k^\top c_k(\theta)+\frac{\rho}{2}\sum_k\|c_k(\theta)\|_2^2.
+        \]
+        \item Apply Adam step on $\theta$ with gradient $\nabla_\theta\mathcal{L}_g$.
+        \item Update multipliers for all $t_k\in\mathcal{T}_c$:
+        \[
+        \lambda_k\gets
+        \mathrm{clip}\!\left(\lambda_k+\rho\,c_k(\theta),-\lambda_{\max},\lambda_{\max}\right).
+        \]
+    \end{enumerate}
+    \item \textbf{Stage B (freeze $\theta$, optimize $\psi$):} for $s=1,\dots,N_B$, sample a mini-batch and apply Adam step on $\psi$ with $\nabla_\psi\mathcal{L}_{\mathrm{CFM}}$.
+    \item \textbf{Stage C (joint optimize $(\psi,\theta)$):} for $s=1,\dots,N_C$:
+    \begin{enumerate}
+        \item Sample a mini-batch and recompute $\mathcal{L}_g(\theta,\lambda)$ exactly as in Stage A.
+        \item Compute $\mathcal{L}_{\mathrm{CFM}}(\psi;\theta)$ and
+        \[
+        \mathcal{L}_{\mathrm{joint}}\gets \mathcal{L}_{\mathrm{CFM}}+\eta_{\mathrm{joint}}\mathcal{L}_g.
+        \]
+        \item Apply Adam step on $(\psi,\theta)$ with gradient $\nabla_{(\psi,\theta)}\mathcal{L}_{\mathrm{joint}}$.
+        \item Update all multipliers with the same clipped rule:
+        \[
+        \lambda_k\gets
+        \mathrm{clip}\!\left(\lambda_k+\rho\,c_k(\theta),-\lambda_{\max},\lambda_{\max}\right).
+        \]
+    \end{enumerate}
+\end{enumerate}
+
+\subsection{CFM Loss for Velocity Network}
+\[
+\mathcal{L}_{\mathrm{CFM}}(\psi;\theta)
+=
+\mathbb{E}_{(x_0,x_1),t}
+\left[
+\left\|
+v_\psi(t,x_t(\theta)) - u_t(\theta)
+\right\|^2
+\right].
+\]
+
+\subsection{Joint Finetune Objective (Stage C)}
+\[
+\mathcal{L}_{\mathrm{joint}}(\psi,\theta,\lambda)
+=
+\mathcal{L}_{\mathrm{CFM}}(\psi;\theta)
++ \eta_{\mathrm{joint}}\,\mathcal{L}_g(\theta,\lambda).
+\]
+
+\section{Current Optimization Loop (Exactly What Code Does)}
+\subsection*{Sampling per Step}
+At each step:
+\begin{enumerate}
+    \item Sample endpoint mini-batch from $p_0$ and $p_1$.
+    \item Solve exact discrete OT assignment on this batch to obtain paired $(x_0^{(i)},x_1^{(i)})$.
+    \item Sample $t \sim \mathrm{Uniform}(0,1)$ for CFM/regularizer terms.
+\end{enumerate}
+
+\subsection*{Stage A: Pretrain Path Model $g_\theta$}
+For $N_A$ steps:
+\begin{enumerate}
+    \item Compute $\mathcal{L}_g(\theta,\lambda)$.
+    \item Gradient step on $\theta$ (Adam, lr\_g).
+    \item Update $\lambda_k \leftarrow \lambda_k + \rho c_k$ (with clipping).
+\end{enumerate}
+
+\subsection*{Stage B: Train Velocity Model $v_\psi$ with Frozen $g_\theta$}
+For $N_B$ steps:
+\begin{enumerate}
+    \item Freeze $\theta$.
+    \item Compute $\mathcal{L}_{\mathrm{CFM}}(\psi;\theta)$.
+    \item Gradient step on $\psi$ (Adam, lr\_v).
+\end{enumerate}
+
+\subsection*{Stage C: Joint Finetune}
+For $N_C$ steps:
+\begin{enumerate}
+    \item Unfreeze both $\theta,\psi$.
+    \item Compute $\mathcal{L}_{\mathrm{joint}}$.
+    \item Gradient step on $(\theta,\psi)$.
+    \item Update multipliers $\lambda_k$ again.
+\end{enumerate}
+
+\subsection*{Baseline Mode}
+In baseline mode there is no $g_\theta$:
+\[
+x_t=\ell_t,\qquad u_t=x_1-x_0.
+\]
+Only Stage B is optimized.
+
+\section{Why This is More Complex than ``Path First, then Flow Matching''}
+Your suggested two-step idea is:
+\begin{enumerate}
+    \item Learn paths (e.g., with a smoothness/Lipschitz regularizer),
+    \item then train flow matching on those paths.
+\end{enumerate}
+
+Current implementation adds two extra mechanisms:
+\begin{itemize}
+    \item \textbf{Augmented Lagrangian} instead of fixed penalties, to push constraints more aggressively.
+    \item \textbf{Stage C joint finetune}, to co-adapt path model and velocity model after separate training.
+\end{itemize}
+
+So, yes: the present loop is strictly more complicated than a plain two-stage approach.
+It can improve constraint handling, but it also introduces additional instability/tuning sensitivity.
+
+\section{How Reported Metrics Are Computed}
+This section defines the fields written in \texttt{metrics.json} and \texttt{comparison.json}.
+
+\subsection*{Constraint metrics}
+For each constrained time $t_k \in \mathcal{T}_c$, compute residual vector
+\[
+c_k = \phi\!\left(\{x_{t_k}^{(i)}\}_{i=1}^B\right)-m_k.
+\]
+Then:
+\[
+\texttt{constraint\_residual\_norms}[t_k] = \|c_k\|_2.
+\]
+The summary scalar is:
+\[
+\texttt{constraint\_residual\_avg}
+=
+\frac{1}{|\mathcal{T}_c|}
+\sum_{t_k\in\mathcal{T}_c}\|c_k\|_2.
+\]
+
+\subsection*{Validation CFM metric}
+On an evaluation batch:
+\begin{enumerate}
+    \item sample paired $(x_0,x_1)$ via the configured coupling mode,
+    \item sample $t \sim \mathrm{Uniform}(0,1)$,
+    \item build $(x_t,u_t)$ from current mode (baseline or constrained),
+    \item evaluate
+    \[
+    \texttt{cfm\_val\_loss}
+    =
+    \frac{1}{B}\sum_{i=1}^B
+    \left\|
+    v_\psi(t_i,x_{t_i}^{(i)})-u_{t_i}^{(i)}
+    \right\|_2^2.
+    \]
+\end{enumerate}
+
+\subsection*{Intermediate-time Wasserstein metric}
+For each constrained time $t_k \in \mathcal{T}_c$:
+\begin{enumerate}
+    \item Sample $x_0^{(i)} \sim p_0$, $i=1,\dots,N$.
+    \item Integrate the learned velocity field from $0$ to $t_k$ with Euler to obtain $\hat{x}_{t_k}^{(i)}$.
+    \item Compute empirical generated moments:
+    \[
+    \hat{\mu}_{t_k} = \frac{1}{N}\sum_{i=1}^N \hat{x}_{t_k}^{(i)},
+    \qquad
+    \hat{\Sigma}_{t_k} = \frac{1}{N}\sum_{i=1}^N
+    (\hat{x}_{t_k}^{(i)}-\hat{\mu}_{t_k})(\hat{x}_{t_k}^{(i)}-\hat{\mu}_{t_k})^\top.
+    \]
+    \item Let target moments be $(\mu_{t_k},\Sigma_{t_k})$ from the analytic Gaussian bridge.
+\end{enumerate}
+The reported per-time metric uses Gaussian $W_2$ distance:
+\[
+\texttt{intermediate\_w2\_gaussian}[t_k]
+=
+W_2\!\left(
+\mathcal{N}(\hat{\mu}_{t_k},\hat{\Sigma}_{t_k}),
+\mathcal{N}(\mu_{t_k},\Sigma_{t_k})
+\right),
+\]
+with closed-form
+\[
+W_2^2
+=
+\|\hat{\mu}_{t_k}-\mu_{t_k}\|_2^2
++
+\mathrm{Tr}\!\left(
+\hat{\Sigma}_{t_k}
++
+\Sigma_{t_k}
+-
+2\left(\Sigma_{t_k}^{1/2}\hat{\Sigma}_{t_k}\Sigma_{t_k}^{1/2}\right)^{1/2}
+\right).
+\]
+The summary scalar is:
+\[
+\texttt{intermediate\_w2\_gaussian\_avg}
+=
+\frac{1}{|\mathcal{T}_c|}\sum_{t_k\in\mathcal{T}_c}
+\texttt{intermediate\_w2\_gaussian}[t_k].
+\]
+
+\paragraph{Sample-based empirical OT variant}
+To support non-Gaussian settings, we also report a sample-based empirical $W_2$ proxy:
+\begin{enumerate}
+    \item Generate trajectory samples $\{\hat{x}_{t_k}^{(i)}\}_{i=1}^N$ by integrating $v_\psi$ from $0$ to $t_k$.
+    \item Draw target samples $\{y_{t_k}^{(j)}\}_{j=1}^N$ from the reference distribution at $t_k$.
+    \item Compute the optimal bipartite matching $\pi^\star$ minimizing squared Euclidean cost:
+    \[
+    \pi^\star = \arg\min_{\pi \in S_N}\sum_{i=1}^N
+    \left\|\hat{x}_{t_k}^{(i)}-y_{t_k}^{(\pi(i))}\right\|_2^2.
+    \]
+\end{enumerate}
+The reported per-time empirical metric is:
+\[
+\texttt{intermediate\_empirical\_w2}[t_k]
+=
+\sqrt{
+\frac{1}{N}
+\sum_{i=1}^N
+\left\|\hat{x}_{t_k}^{(i)}-y_{t_k}^{(\pi^\star(i))}\right\|_2^2
+}.
+\]
+and the average is:
+\[
+\texttt{intermediate\_empirical\_w2\_avg}
+=
+\frac{1}{|\mathcal{T}_c|}\sum_{t_k\in\mathcal{T}_c}
+\texttt{intermediate\_empirical\_w2}[t_k].
+\]
+In code this uses exact discrete OT matching (Hungarian algorithm), so evaluation sample count is configured separately to control CPU cost.
+
+\subsection*{Path energy proxy}
+Using the same evaluation batch/time samples as \texttt{cfm\_val\_loss}:
+\[
+\texttt{path\_energy\_proxy}
+=
+\frac{1}{B}\sum_{i=1}^B \|u_{t_i}^{(i)}\|_2^2.
+\]
+This is a diagnostic quantity, not an objective minimized directly at evaluation time.
+
+\subsection*{Transport quality metrics}
+To measure endpoint transport induced by $v_\psi$:
+\begin{enumerate}
+    \item Sample $x_0^{(i)} \sim p_0$, $i=1,\dots,N$.
+    \item Integrate forward with explicit Euler over $n_{\text{steps}}$ steps:
+    \[
+    x^{(i)}_{n+1}
+    =
+    x^{(i)}_{n}
+    +
+    \Delta t\, v_\psi(t_n, x^{(i)}_n),
+    \quad
+    \Delta t = \frac{1}{n_{\text{steps}}},
+    \quad
+    t_n = n\Delta t.
+    \]
+    \item Let $\hat{x}_1^{(i)} = x^{(i)}_{n_{\text{steps}}}$.
+    \item Compute empirical endpoint statistics:
+    \[
+    \hat{\mu}_1 = \frac{1}{N}\sum_{i=1}^N \hat{x}_1^{(i)},
+    \qquad
+    \hat{\Sigma}_1=\frac{1}{N}\sum_{i=1}^N
+    (\hat{x}_1^{(i)}-\hat{\mu}_1)(\hat{x}_1^{(i)}-\hat{\mu}_1)^\top.
+    \]
+\end{enumerate}
+Then:
+\[
+\texttt{transport\_mean\_error\_l2}
+=
+\|\hat{\mu}_1-\mu_1\|_2,
+\]
+\[
+\texttt{transport\_cov\_error\_fro}
+=
+\|\hat{\Sigma}_1-\Sigma_1\|_F,
+\]
+\[
+\texttt{transport\_score}
+=
+\texttt{transport\_mean\_error\_l2}
++
+\texttt{transport\_cov\_error\_fro}.
+\]
+
+\subsection*{Stage-history diagnostics}
+During training, the history log also records:
+\begin{itemize}
+    \item \texttt{avg\_residual\_norm}: mini-batch average of $\|c_k\|_2$ over constrained times,
+    \item \texttt{loss}: stage objective value,
+    \item and stage-specific terms (e.g., regularizer or \texttt{cfm\_loss} in Stage C).
+\end{itemize}
+
+\section{Example Experiment Settings (Current Repository)}
+This section summarizes the experiment families currently implemented and logged in this repository.
+
+\subsection*{A. Primary trained benchmark: 2D Gaussian $\rightarrow$ 2D Gaussian}
+\begin{itemize}
+    \item \textbf{Data family}: both endpoints are Gaussians in $\mathbb{R}^2$.
+    \item \textbf{Targets}: intermediate moment targets are analytic Gaussian bridge moments at
+    $t\in\{0.25,0.50,0.75\}$.
+    \item \textbf{Pair coupling options}: exact discrete OT (\texttt{data=gaussian\_ot}) or random permutation pairing (\texttt{data=gaussian\_random}).
+    \item \textbf{Training modes}: baseline (linear path), constrained (Stage A/B/C), and comparison (run both).
+    \item \textbf{Typical profiles}: \texttt{train=default}, \texttt{train=ab\_only} (Stage C disabled), and \texttt{train=smoke}.
+    \item \textbf{Representative output roots}: \texttt{outputs/hparam\_sweep/}, \texttt{outputs/ab\_only\_sweep/}, and timestamped comparison folders under \texttt{outputs/<date>/...}.
+\end{itemize}
+
+\subsection*{B. Bridge-SDE preview: Gaussian start with bridge-like stochastic dynamics}
+\begin{itemize}
+    \item \textbf{Purpose}: geometry/diagnostic preview prior to training on more complex non-Gaussian trajectories.
+    \item \textbf{Initial law}: Gaussian $p_0=\mathcal{N}(\mu_0,\Sigma_0)$ from bridge-preview parameters.
+    \item \textbf{Simulated dynamics} (from \texttt{bridge\_sde.py}):
+    \[
+    dX_t = v_x\,dt + \sigma_x\,dW_t^{(x)},
+    \]
+    \[
+    dY_t =
+    -\kappa_b\,g(X_t)\,Y_t\,dt
+    + \sigma_y\!\left(1-\delta_b\,g(X_t)\right)dW_t^{(y)},
+    \qquad
+    g(x)=\exp\!\left(-\frac{(x-c)^2}{2w^2}\right).
+    \]
+    \item \textbf{Current status}: used in notebook/preview artifacts (snapshots, spread plots, animation), not yet integrated as a full training target in the main Stage A/B/C experiment pipeline.
+    \item \textbf{Output root}: \texttt{outputs/preview\_bridge\_sde/<timestamp>/}.
+\end{itemize}
+
+\paragraph{Scope note}
+At present, the optimization formalized in Sections 1--9 corresponds to the Gaussian-to-Gaussian benchmark pipeline.
+The Bridge-SDE path is currently a validated simulation/visualization track used to prepare future non-Gaussian training settings.
+
+\section{Practical Hyperparameters in the Loop}
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Symbol / Config & Role \\
+\midrule
+$\alpha$ & weight of velocity-deviation regularizer \\
+$\beta$ & weight of temporal smoothness term \\
+$\rho$ & augmented-Lagrangian quadratic and multiplier update scale \\
+$\eta_{\mathrm{joint}}$ & weight of $\mathcal{L}_g$ inside Stage C objective \\
+lr\_g, lr\_v & learning rates for path and velocity networks \\
+$N_A,N_B,N_C$ & number of steps in each stage \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\end{document}

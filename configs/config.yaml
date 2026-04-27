@@ -1,0 +1,20 @@
+defaults:
+  - experiment: constrained
+  - data: gaussian_ot
+  - model: default
+  - train: default
+  - _self_
+
+seed: 7
+device: cpu
+
+output:
+  save_checkpoint: true
+  save_plots: true
+  plot_pairs: 32
+
+hydra:
+  job:
+    chdir: true
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${experiment.label}_${train.label}/${now:%H-%M-%S}

@@ -1,0 +1,4 @@
+activation: silu
+velocity_hidden_dims: [128, 128]
+path_hidden_dims: [128, 128]
+
