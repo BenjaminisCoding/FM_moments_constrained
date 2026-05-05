@@ -1,4 +1,5 @@
 label: gaussian_random
+family: gaussian
 coupling: random
 
 dim: 2

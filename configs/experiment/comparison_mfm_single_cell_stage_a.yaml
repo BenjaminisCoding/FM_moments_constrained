@@ -1,0 +1,28 @@
+mode: constrained
+run_both_modes: false
+comparison_methods: [constrained, metric, metric_alpha0, metric_constrained_al, metric_constrained_soft]
+label: comparison_mfm_single_cell_stage_a
+
+protocol: strict_leaveout
+holdout_index: 2
+holdout_indices: [1, 2, 3]
+
+method_overrides:
+  constrained:
+    train:
+      alpha: 1.0
+      beta: 0.05
+      rho: 25.0
+  metric_alpha0:
+    mfm:
+      alpha: 0.0
+  metric_constrained_al:
+    mfm:
+      alpha: 0.4
+      moment_eta: 2.0
+    train:
+      rho: 15.0
+  metric_constrained_soft:
+    mfm:
+      alpha: 0.4
+      moment_eta: 2.0

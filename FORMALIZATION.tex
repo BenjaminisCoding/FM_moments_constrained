@@ -3,9 +3,9 @@
 \usepackage{amsmath,amssymb,amsthm,mathtools,bm}
 \usepackage{booktabs}
 
-\title{Formalization of Constrained Flow Matching v1}
+\title{Formalization of Constrained and Metric Flow Matching v1}
 \author{Project Notes}
-\date{April 27, 2026}
+\date{April 29, 2026}
 
 \begin{document}
 \maketitle
@@ -17,7 +17,8 @@ In v1, the state is $x \in \mathbb{R}^2$.
 \paragraph{Given}
 \begin{itemize}
     \item Initial and terminal marginals $p_0, p_1$.
-    \item A coupling over endpoint pairs $(x_0, x_1)$ (configured as exact discrete OT or random permutation per batch).
+    \item A coupling over endpoint pairs $(x_0, x_1)$:
+    batch OT (\texttt{ot}), random permutation (\texttt{random}), or cached global balanced OT plan sampling (\texttt{ot\_global}).
     \item Constraint times $\mathcal{T}_c = \{0.25, 0.5, 0.75\}$.
     \item Target moments $m_k$ at each $t_k \in \mathcal{T}_c$.
 \end{itemize}
@@ -132,6 +133,30 @@ m_k
 \end{bmatrix}.
 \]
 
+\subsection{Bridge benchmark target construction}
+For the bridge benchmark, target constraints are not analytic Gaussians.
+Instead, we simulate a reference bridge SDE and estimate targets from high-sample Monte Carlo snapshots:
+\[
+\{x_{t_k}^{(i)}\}_{i=1}^{N_{\text{target}}},\qquad N_{\text{target}}=200000 \text{ (default)}.
+\]
+Bridge times are represented in normalized coordinates $t_{\mathrm{norm}}\in[0,1]$, and mapped to physical SDE time by
+\[
+t_{\mathrm{phys}} = t_{\mathrm{norm}} \cdot T_{\mathrm{bridge}},
+\]
+where $T_{\mathrm{bridge}}=\texttt{bridge.total\_time}$ (now set to $1.5$ in bridge experiment configs).
+So constraints at normalized times $\{0.25,0.5,0.75\}$ are matched to physical snapshots at $\{0.375,0.75,1.125\}$, and endpoint $t_{\mathrm{norm}}=1$ uses physical time $1.5$.
+For each constrained time $t_k$:
+\[
+m_k
+=
+\begin{bmatrix}
+\hat{\mu}_{t_k}\\
+\mathrm{vec}(\hat{\Sigma}_{t_k})
+\end{bmatrix},
+\]
+where $(\hat{\mu}_{t_k},\hat{\Sigma}_{t_k})$ are empirical moments of the cached bridge samples.
+These high-precision targets are cached under \texttt{.cache/bridge\_targets/} keyed by bridge data config, seed, and constrained times, then reused across runs.
+
 \section{Loss Terms Used in the Current Implementation}
 \subsection{Path Regularizer}
 \[
@@ -139,8 +164,7 @@ R(\theta)
 =
 \alpha\,
 \mathbb{E}\!\left[\|u_t-(x_1-x_0)\|^2\right]
-+\beta\,
-\mathbb{E}\!\left[\|\partial_t u_t\|^2\right].
++\mathbb{E}\!\left[\beta(t)\,\|\partial_t u_t\|^2\right].
 \]
 
 \paragraph{Interpretation}
@@ -148,6 +172,65 @@ R(\theta)
     \item First term keeps the learned path velocity near linear transport velocity.
     \item Second term penalizes rapid temporal variation of velocity (temporal smoothness).
 \end{itemize}
+
+\subsection{Time-Varying Smoothness Weighting in Stage A/C}
+For constrained mode, Stage A and Stage C now use a time-varying smoothness weight $\beta(t)$ (with backward-compatible constant mode).
+Let the anchor set be
+\[
+\mathcal{A}=\{0=t_0<t_1<\cdots<t_M=1\},
+\]
+where anchors are endpoints plus constrained times.
+Define full moment feature vectors
+\[
+m_t=\begin{bmatrix}\mu_t\\ \mathrm{vec}(\Sigma_t)\end{bmatrix},
+\]
+and interval drift magnitudes
+\[
+d_i=\frac{\|m_{t_{i+1}}-m_{t_i}\|_2}{t_{i+1}-t_i},\qquad i=0,\dots,M-1.
+\]
+With $\bar d=\frac{1}{M}\sum_{i=0}^{M-1} d_i$, base weight $\beta_{\mathrm{base}}$, and scheduler hyperparameters $(p,\epsilon,s_{\min},s_{\max})$, the interval scales are
+\[
+s_i=
+\mathrm{clip}\!\left(
+\left(\frac{\bar d}{d_i+\epsilon}\right)^p,\,
+s_{\min},\,s_{\max}
+\right),
+\qquad
+\beta_i=\beta_{\mathrm{base}}\,s_i.
+\]
+
+\paragraph{Piecewise schedule}
+\[
+\beta(t)=\beta_i,\qquad t\in[t_i,t_{i+1}).
+\]
+
+\paragraph{Linear schedule}
+First define anchor weights from adjacent intervals:
+\[
+\tilde\beta_0=\beta_0,\qquad
+\tilde\beta_M=\beta_{M-1},\qquad
+\tilde\beta_i=\frac{\beta_{i-1}+\beta_i}{2}\ \ (i=1,\dots,M-1).
+\]
+Then for $t\in[t_i,t_{i+1}]$,
+\[
+\beta(t)=
+\tilde\beta_i
++
+\frac{t-t_i}{t_{i+1}-t_i}\bigl(\tilde\beta_{i+1}-\tilde\beta_i\bigr).
+\]
+
+\paragraph{Constant schedule (backward compatibility)}
+\[
+\beta(t)\equiv \beta_{\mathrm{base}}.
+\]
+
+\paragraph{Updated regularizer form used in code}
+\[
+R(\theta)=
+\alpha\cdot\frac{1}{B}\sum_{i=1}^B\|u_{t^{(i)}}-(x_1^{(i)}-x_0^{(i)})\|_2^2
++
+\frac{1}{B}\sum_{i=1}^B\beta(t^{(i)})\,\|\partial_t u_{t^{(i)}}\|_2^2.
+\]
 
 \subsection{Augmented Lagrangian for Path Learning (Stage A/C)}
 \[
@@ -164,7 +247,7 @@ Multiplier updates (with clipping in code):
 \]
 
 \subsubsection*{Algorithm 1: Mini-batch augmented-Lagrangian updates (code-equivalent)}
-\textbf{Inputs:} constraint times $\mathcal{T}_c$, target features $\{m_k\}_{t_k\in\mathcal{T}_c}$, hyperparameters $(\alpha,\beta,\rho,\eta_{\mathrm{joint}},\lambda_{\max})$, and step counts $(N_A,N_B,N_C)$.
+\textbf{Inputs:} constraint times $\mathcal{T}_c$, target features $\{m_k\}_{t_k\in\mathcal{T}_c}$, hyperparameters $(\alpha,\beta_{\mathrm{base}},\rho,\eta_{\mathrm{joint}},\lambda_{\max},p,\epsilon,s_{\min},s_{\max})$, schedule type (`constant`, `piecewise`, or `linear`), and step counts $(N_A,N_B,N_C)$.
 
 \begin{enumerate}
     \item Initialize multipliers: $\lambda_k \gets 0$ for all $t_k\in\mathcal{T}_c$.
@@ -176,7 +259,7 @@ Multiplier updates (with clipping in code):
         \[
         R(\theta)\gets
         \alpha\,\frac{1}{B}\sum_i\|u_{t^{(i)}}-(x_1^{(i)}-x_0^{(i)})\|_2^2
-        +\beta\,\frac{1}{B}\sum_i\|\partial_t u_{t^{(i)}}\|_2^2.
+        +\frac{1}{B}\sum_i \beta(t^{(i)})\,\|\partial_t u_{t^{(i)}}\|_2^2.
         \]
         \item For each $t_k\in\mathcal{T}_c$, compute
         \[
@@ -246,12 +329,22 @@ v_\psi(t,x_t(\theta)) - u_t(\theta)
 
 \section{Current Optimization Loop (Exactly What Code Does)}
 \subsection*{Sampling per Step}
-At each step:
+At each step, endpoint pairing depends on configured coupling:
 \begin{enumerate}
-    \item Sample endpoint mini-batch from $p_0$ and $p_1$.
-    \item Solve exact discrete OT assignment on this batch to obtain paired $(x_0^{(i)},x_1^{(i)})$.
+    \item \textbf{\texttt{ot}}: sample endpoint mini-batches from $p_0$ and $p_1$, then solve exact one-to-one assignment (Hungarian) on that batch.
+    \item \textbf{\texttt{random}}: sample endpoint mini-batches from $p_0$ and $p_1$, then apply a random permutation pairing.
+    \item \textbf{\texttt{ot\_global}} (single-cell): precompute one balanced global Kantorovich plan
+    \[
+    \Pi \in \mathbb{R}_{+}^{N_0\times N_1},
+    \]
+    once per run setup (cacheable), store sparse support
+    \[
+    \mathcal{E}=\{(i,j,\Pi_{ij}):\Pi_{ij}>0\},
+    \]
+    then sample paired indices $(i,j)\sim \Pi$ \emph{with replacement} for each SGD step.
     \item Sample $t \sim \mathrm{Uniform}(0,1)$ for CFM/regularizer terms.
 \end{enumerate}
+For \texttt{ot\_global}, pair sampling is stochastic from the fixed plan support (not deterministic replay of one static matching list).
 
 \subsection*{Stage A: Pretrain Path Model $g_\theta$}
 For $N_A$ steps:
@@ -284,6 +377,174 @@ In baseline mode there is no $g_\theta$:
 x_t=\ell_t,\qquad u_t=x_1-x_0.
 \]
 Only Stage B is optimized.
+
+\section{Constrained-Information Metric Flow Matching (Endpoint LAND + Moment Constraints)}
+This section formalizes the new hybrid metric variants:
+\[
+\texttt{metric\_constrained\_al},\qquad
+\texttt{metric\_constrained\_soft}.
+\]
+The design goal is a fair comparison: LAND geometry is learned from endpoint marginals only, while intermediate information is injected only through moment constraints.
+
+\subsection*{MFM mean path and conditional flow}
+Let $g_\theta(t,x_0,x_1)$ be the geopath network and $\alpha_{\mathrm{mfm}}\ge 0$.
+On $[0,1]$, define
+\[
+\gamma(t)=1-t^2-(1-t)^2=2t(1-t),\qquad
+\dot{\gamma}(t)=2(1-2t).
+\]
+The MFM mean path is
+\[
+\mu_t
+=
+(1-t)x_0+tx_1
+\;+\;
+\alpha_{\mathrm{mfm}}\gamma(t)\,g_\theta(t,x_0,x_1).
+\]
+Its time derivative is
+\[
+u_t=\partial_t \mu_t
+=
+(x_1-x_0)
+\alpha_{\mathrm{mfm}}
+\left[
+\dot{\gamma}(t)\,g_\theta(t,x_0,x_1)
+\gamma(t)\,\partial_t g_\theta(t,x_0,x_1)
+\right].
+\]
+
+\subsection*{Noisy state used in Stage B metric flow matching}
+Stage B uses noisy locations
+\[
+x_t=\mu_t+\sigma_t\varepsilon,\qquad \varepsilon\sim\mathcal{N}(0,I),
+\]
+with $\sigma_t=\sigma$ in the current native backend implementation.
+The velocity target remains $u_t$.
+Therefore the Stage B objective is unchanged:
+\[
+\mathcal{L}_{\mathrm{CFM}}^{\mathrm{metric}}(\psi;\theta)
+=
+\mathbb{E}_{(x_0,x_1),t,\varepsilon}
+\left\|
+v_\psi(t,x_t)-u_t
+\right\|_2^2.
+\]
+
+\subsection*{LAND metric tensor and geodesic loss}
+Given query points $x\in\mathbb{R}^{B\times d}$ and manifold samples
+$\{z_n\}_{n=1}^{N}\subset\mathbb{R}^d$, define RBF weights
+\[
+w_n(x)=\exp\!\left(-\frac{\|x-z_n\|_2^2}{2\gamma_{\mathrm{land}}^2}\right),
+\]
+and diagonal inverse metric entries
+\[
+\big[G^{-1}(x)\big]_{jj}
+=
+\frac{1}{
+\sum_{n=1}^N w_n(x)\,(z_{n,j}-x_j)^2
+\rho_{\mathrm{land}}
+}.
+\]
+The LAND geodesic loss is
+\[
+\mathcal{L}_{\mathrm{LAND}}(\theta)
+=
+\mathbb{E}\left[u_t^\top G^{-1}(\mu_t)u_t\right]
+=
+\mathbb{E}\left[\sum_{j=1}^d u_{t,j}^2\,\big[G^{-1}(\mu_t)\big]_{jj}\right].
+\]
+
+\subsection*{Endpoint-only manifold policy (fairness default)}
+Define endpoint manifold pool
+\[
+\mathcal{M}_{\mathrm{end}}=
+\{x_0^{(i)}\}_{i=1}^{N_0}\cup\{x_1^{(j)}\}_{j=1}^{N_1}.
+\]
+In default policy \texttt{mfm.reference\_pool\_policy=endpoints\_only},
+$\mathcal{L}_{\mathrm{LAND}}$ uses only samples from $\mathcal{M}_{\mathrm{end}}$.
+Intermediate marginals are excluded from LAND metric construction.
+(Optional ablation \texttt{anchors\_all} re-includes intermediate anchors.)
+
+\subsection*{Moment constraints on MFM path}
+At each constrained time $t_k\in\mathcal{T}_c$:
+\[
+c_k(\theta)=
+\phi\!\left(\{\mu_{t_k}^{(i)}(\theta)\}_{i=1}^B\right)-m_k.
+\]
+Define average squared residual
+\[
+\overline{C}(\theta)=\frac{1}{|\mathcal{T}_c|}\sum_{k}\|c_k(\theta)\|_2^2.
+\]
+
+\subsection*{Hybrid Stage A objectives}
+With coupling weight $\eta_{\mathrm{moment}}\ge 0$:
+
+\paragraph{Soft variant (\texttt{metric\_constrained\_soft})}
+\[
+\mathcal{L}_{A}^{\mathrm{soft}}(\theta)
+=
+\mathcal{L}_{\mathrm{LAND}}(\theta)
+\;+\;
+\eta_{\mathrm{moment}}\,\overline{C}(\theta).
+\]
+
+\paragraph{Augmented-Lagrangian variant (\texttt{metric\_constrained\_al})}
+\[
+\mathcal{L}_{A}^{\mathrm{AL}}(\theta,\lambda)
+=
+\mathcal{L}_{\mathrm{LAND}}(\theta)
+\;+\;
+\eta_{\mathrm{moment}}
+\left[
+\sum_k \lambda_k^\top c_k(\theta)
+\frac{\rho}{2}\sum_k \|c_k(\theta)\|_2^2
+\right].
+\]
+Multiplier update (code-equivalent, with clipping):
+\[
+\lambda_k\leftarrow
+\mathrm{clip}\!\left(\lambda_k+\rho\,c_k(\theta),-\lambda_{\max},\lambda_{\max}\right).
+\]
+
+\paragraph{Degenerate case check}
+If $\eta_{\mathrm{moment}}=0$, both hybrid variants reduce to pure LAND Stage A:
+\[
+\mathcal{L}_{A}=\mathcal{L}_{\mathrm{LAND}}.
+\]
+
+\subsection*{Fairness statement}
+Under the default \texttt{endpoints\_only} policy:
+\begin{itemize}
+    \item LAND sees only $p_0$ and $p_1$ samples;
+    \item intermediate information enters only via $\{m_k\}_{t_k\in\mathcal{T}_c}$ through $c_k(\theta)$.
+\end{itemize}
+This enforces comparable intermediate-information access between constrained and metric-constrained methods.
+
+\subsection*{Algorithm: Hybrid MFM Stage A/B (AL and Soft variants)}
+\textbf{Inputs:} $\mathcal{T}_c$, targets $\{m_k\}$, $(\rho,\lambda_{\max},\eta_{\mathrm{moment}})$,
+LAND params $(\gamma_{\mathrm{land}},\rho_{\mathrm{land}})$, steps $(N_A,N_B)$.
+\begin{enumerate}
+    \item Build endpoint manifold pool $\mathcal{M}_{\mathrm{end}}$ (default policy).
+    \item If AL variant, initialize $\lambda_k\gets 0$ for all $t_k\in\mathcal{T}_c$.
+    \item \textbf{Stage A} for $s=1,\dots,N_A$:
+    \begin{enumerate}
+        \item Sample paired endpoints $\{(x_0^{(i)},x_1^{(i)})\}_{i=1}^B$ and $t^{(i)}\sim U[0,1]$.
+        \item Compute $(\mu_{t^{(i)}},u_{t^{(i)}})$ from MFM geopath equations.
+        \item Compute $\mathcal{L}_{\mathrm{LAND}}$ using $\mathcal{M}_{\mathrm{end}}$.
+        \item Compute $c_k(\theta)$ for all constrained times.
+        \item If soft variant: optimize $\mathcal{L}_A^{\mathrm{soft}}$.
+        \item If AL variant: optimize $\mathcal{L}_A^{\mathrm{AL}}$, then update all $\lambda_k$ by clipped AL rule.
+    \end{enumerate}
+    \item \textbf{Stage B} for $s=1,\dots,N_B$:
+    \begin{enumerate}
+        \item Freeze $g_\theta$.
+        \item Sample $(t,x_t,u_t)$ with metric backend:
+        \[
+        x_t=\mu_t+\sigma_t\varepsilon,\qquad \varepsilon\sim\mathcal{N}(0,I).
+        \]
+        \item Optimize velocity model with $\mathcal{L}_{\mathrm{CFM}}^{\mathrm{metric}}$.
+    \end{enumerate}
+\end{enumerate}
 
 \section{Why This is More Complex than ``Path First, then Flow Matching''}
 Your suggested two-step idea is:
@@ -412,6 +673,157 @@ and the average is:
 \texttt{intermediate\_empirical\_w2}[t_k].
 \]
 In code this uses exact discrete OT matching (Hungarian algorithm), so evaluation sample count is configured separately to control CPU cost.
+\paragraph{Implementation note (current code path)}
+In practice, this empirical OT metric uses
+\[
+N=\texttt{eval\_intermediate\_ot\_samples},
+\]
+with a current default of $N=256$ in the single-cell train profiles.
+Each run computes this metric from one sampled evaluation set (rather than averaging over multiple independent evaluation batches inside the run).
+For each evaluated timepoint, Hungarian matching is solved on that sampled set at that time.
+Therefore \texttt{intermediate\_empirical\_w2\_avg} is an average over timepoints, not an average over multiple evaluation batches.
+
+\paragraph{Full-set balanced OT variant (robust, additive; single-cell)}
+In addition to the legacy sampled Hungarian metrics above, single-cell evaluation can report a robust full-set balanced OT family using exact LP on possibly rectangular supports (unequal cardinalities allowed).
+Legacy fields are kept unchanged for backward comparability.
+
+Given weighted empirical measures
+\[
+\hat{\mu}_t=\sum_{i=1}^{n_t} a_i\,\delta_{x_t^{(i)}},\qquad
+\nu_t=\sum_{j=1}^{m_t} b_j\,\delta_{y_t^{(j)}},
+\]
+with $a_i,b_j\ge 0$, $\sum_i a_i=\sum_j b_j=1$, define
+\[
+W_2^2(\hat{\mu}_t,\nu_t)
+=
+\min_{\Gamma\in\mathbb{R}_+^{n_t\times m_t}}
+\sum_{i=1}^{n_t}\sum_{j=1}^{m_t}
+\Gamma_{ij}\,\|x_t^{(i)}-y_t^{(j)}\|_2^2
+\]
+subject to
+\[
+\sum_j \Gamma_{ij}=a_i,\qquad
+\sum_i \Gamma_{ij}=b_j.
+\]
+Reported metric value is $W_2=\sqrt{W_2^2}$.
+
+\paragraph{Stage-A robust definition (weighted edge measure)}
+With global endpoint plan support $\mathcal{E}=\{(i,j,\Pi_{ij})\}$ from \texttt{ot\_global}:
+\[
+\hat{\mu}^{\mathrm{lin}}_t
+=
+\sum_{(i,j)\in\mathcal{E}}
+\Pi_{ij}\,
+\delta_{(1-t)x_0^{(i)}+tx_1^{(j)}},
+\]
+\[
+\hat{\mu}^{\mathrm{learned}}_t
+=
+\sum_{(i,j)\in\mathcal{E}}
+\Pi_{ij}\,
+\delta_{x_t^{(i,j)}(\theta)},
+\]
+where $x_t^{(i,j)}(\theta)$ is the mode-specific learned interpolant (constrained-correction or MFM path).
+Target measure at time $t$ is uniform over the full observed pool at that timestamp:
+\[
+\nu_t=\frac{1}{|\mathcal{Y}_t|}\sum_{y\in\mathcal{Y}_t}\delta_y.
+\]
+Reported keys are:
+\[
+\texttt{linear\_full\_ot\_w2}[t],\quad
+\texttt{learned\_full\_ot\_w2}[t],\quad
+\texttt{linear\_full\_ot\_w2\_avg},\quad
+\texttt{learned\_full\_ot\_w2\_avg},
+\]
+plus holdout and delta analogs.
+
+\paragraph{A+B rollout robust definition}
+For velocity-enabled single-cell runs, push forward the full source endpoint pool $\{x_0^{(i)}\}_{i=1}^{N_0}$:
+\[
+\hat{x}_t^{(i)}=\Phi_t^{v_\psi}(x_0^{(i)}),
+\]
+then compare uniform generated and full observed target pools via balanced OT:
+\[
+\texttt{intermediate\_full\_ot\_w2}[t_k],\quad
+\texttt{intermediate\_full\_ot\_w2\_avg},\quad
+\texttt{transport\_endpoint\_full\_ot\_w2},\quad
+\texttt{holdout\_full\_ot\_w2}.
+\]
+These robust keys are additive and do not replace legacy sampled Hungarian fields.
+
+\subsection*{Stage-A-only interpolant evaluation (no velocity rollout)}
+For Stage-A-only runs ($N_B=N_C=0$), we intentionally evaluate only interpolants:
+\begin{enumerate}
+    \item Sample endpoint pairs $(x_0^{(i)},x_1^{(i)})$ using configured coupling (\texttt{ot}, \texttt{random}, or \texttt{ot\_global}).
+    \item For each constrained time $t_k$:
+    \[
+    x_{t_k,\mathrm{lin}}^{(i)}=(1-t_k)x_0^{(i)}+t_kx_1^{(i)},
+    \]
+    \[
+    x_{t_k,\mathrm{learned}}^{(i)}=(1-t_k)x_0^{(i)}+t_kx_1^{(i)}+t_k(1-t_k)g_\theta(t_k,x_0^{(i)},x_1^{(i)}).
+    \]
+    \item Draw reference bridge samples $\{y_{t_k}^{(j)}\}_{j=1}^N$ at the same $t_k$ from cached target marginals.
+    \item Compute empirical OT distances for linear and learned interpolants:
+    \[
+    \texttt{linear\_empirical\_w2}[t_k]
+    =
+    W_2^{\mathrm{emp}}
+    \big(\{x_{t_k,\mathrm{lin}}^{(i)}\},\{y_{t_k}^{(j)}\}\big),
+    \]
+    \[
+    \texttt{learned\_empirical\_w2}[t_k]
+    =
+    W_2^{\mathrm{emp}}
+    \big(\{x_{t_k,\mathrm{learned}}^{(i)}\},\{y_{t_k}^{(j)}\}\big).
+    \]
+\end{enumerate}
+Reported summary fields:
+\[
+\texttt{linear\_empirical\_w2\_avg},\quad
+\texttt{learned\_empirical\_w2\_avg},\quad
+\texttt{delta\_avg\_learned\_minus\_linear}
+=
+\texttt{learned\_avg}-\texttt{linear\_avg}.
+\]
+\paragraph{Implementation note (current code path)}
+Stage-A-only evaluation draws one endpoint sample set
+\[
+\{(x_0^{(i)},x_1^{(i)})\}_{i=1}^N,\qquad
+N=\texttt{eval\_intermediate\_ot\_samples}
+\]
+once per run (current single-cell default: $N=256$).
+The same sampled endpoints are reused to build linear and learned interpolants at all evaluation times.
+At each evaluation time, a target sample set of size $N$ is drawn once, then Hungarian matching is solved separately for linear-vs-target and learned-vs-target sets.
+Consequently, \texttt{linear\_empirical\_w2\_avg} and \texttt{learned\_empirical\_w2\_avg} are averages over evaluation times only, not averages over multiple evaluation batches.
+In this profile, velocity-rollout metrics are out-of-scope and stored as \texttt{null} in JSON outputs (\texttt{cfm\_val\_loss}, transport metrics, and velocity-based intermediate metrics).
+
+\subsection*{Bridge Stage-A+B rollout evaluation}
+For bridge runs with velocity training enabled (for example \texttt{train=ab\_only}), evaluation uses rollout marginals from the learned velocity field:
+\begin{enumerate}
+    \item Sample $x_0^{(i)}$ from the bridge start marginal pool.
+    \item Integrate $v_\psi$ with Euler to obtain generated samples $\hat{x}^{(i)}_t$ at normalized times
+    \[
+    t\in\{0.25,0.50,0.75,1.00\}.
+    \]
+    \item Draw true bridge reference samples $\{y_t^{(j)}\}_{j=1}^N$ at the same normalized times from the cached target sampler (internally mapped to physical time via \texttt{bridge.total\_time}).
+    \item Compute empirical OT distances
+    \[
+    \widehat{W}_2(t)
+    =
+    W_2^{\mathrm{emp}}\big(\{\hat{x}^{(i)}_t\},\{y_t^{(j)}\}\big).
+    \]
+\end{enumerate}
+Reported bridge rollout fields are:
+\[
+\texttt{intermediate\_empirical\_w2}[t_k]=\widehat{W}_2(t_k),\quad
+\texttt{intermediate\_empirical\_w2\_avg}=\frac{1}{3}\sum_{t_k\in\{0.25,0.50,0.75\}}\widehat{W}_2(t_k),
+\]
+\[
+\texttt{transport\_endpoint\_empirical\_w2}=\widehat{W}_2(1.00),\quad
+\texttt{transport\_score}=\texttt{transport\_endpoint\_empirical\_w2}.
+\]
+For bridge velocity-enabled runs, Gaussian-only transport fields are intentionally \texttt{null}
+(\texttt{transport\_mean\_error\_l2}, \texttt{transport\_cov\_error\_fro}, \texttt{intermediate\_w2\_gaussian}, \texttt{intermediate\_w2\_gaussian\_avg}).
 
 \subsection*{Path energy proxy}
 Using the same evaluation batch/time samples as \texttt{cfm\_val\_loss}:
@@ -422,7 +834,7 @@ Using the same evaluation batch/time samples as \texttt{cfm\_val\_loss}:
 \]
 This is a diagnostic quantity, not an objective minimized directly at evaluation time.
 
-\subsection*{Transport quality metrics}
+\subsection*{Transport quality metrics (Gaussian family)}
 To measure endpoint transport induced by $v_\psi$:
 \begin{enumerate}
     \item Sample $x_0^{(i)} \sim p_0$, $i=1,\dots,N$.
@@ -474,6 +886,142 @@ During training, the history log also records:
     \item and stage-specific terms (e.g., regularizer or \texttt{cfm\_loss} in Stage C).
 \end{itemize}
 
+\section{Unsupervised Soft Pseudo-Type Constraints for Single-Cell Data}
+This section formalizes the optional unlabeled-cell extension where class-like constraints are learned from data rather than provided as annotations.
+
+\subsection*{GMM posterior definition}
+Given whitened single-cell features $x\in\mathbb{R}^d$, define a $K$-component mixture
+\[
+p_\phi(x)=\sum_{k=1}^{K}\pi_k\,\mathcal{N}(x\mid \mu_k,\Sigma_k),
+\qquad
+\pi_k\ge 0,\ \sum_k \pi_k=1.
+\]
+The soft pseudo-type membership is
+\[
+q_k(x)=P_\phi(z=k\mid x)
+=
+\frac{\pi_k\,\mathcal{N}(x\mid\mu_k,\Sigma_k)}
+{\sum_{j=1}^{K}\pi_j\,\mathcal{N}(x\mid\mu_j,\Sigma_j)}.
+\]
+In code, $(\pi_k,\mu_k,\Sigma_k)$ are frozen after preprocessing and $q_k(x)$ is evaluated with a differentiable torch implementation during training.
+
+\subsection*{$K$ selection by BIC + stability}
+For each $K\in[K_{\min},K_{\max}]$ and each seed $s\in\mathcal{S}$:
+\begin{enumerate}
+    \item fit GMM $\phi_{K,s}$;
+    \item compute $\mathrm{BIC}_{K,s}$ on full feature matrix;
+    \item compute hard labels $\hat{z}_{K,s}(x)=\arg\max_k q_k(x;\phi_{K,s})$.
+\end{enumerate}
+Define
+\[
+\widetilde{\mathrm{BIC}}_K=\mathrm{median}_{s\in\mathcal{S}}\mathrm{BIC}_{K,s},
+\]
+\[
+\mathrm{Stab}_K
+=
+\frac{2}{|\mathcal{S}|(|\mathcal{S}|-1)}
+\sum_{s_1<s_2}\mathrm{ARI}\!\left(\hat{z}_{K,s_1},\hat{z}_{K,s_2}\right).
+\]
+Given threshold $\tau$, let
+\[
+\mathcal{K}_\tau=\{K:\mathrm{Stab}_K\ge\tau\}.
+\]
+Selection rule:
+\[
+K^{\star}=
+\begin{cases}
+\arg\min_{K\in\mathcal{K}_\tau}\widetilde{\mathrm{BIC}}_K, & \mathcal{K}_\tau\neq\varnothing,\\[4pt]
+\arg\min_{K\in[K_{\min},K_{\max}]}\widetilde{\mathrm{BIC}}_K, & \text{otherwise}.
+\end{cases}
+\]
+Diagnostics reported in summaries are \texttt{bic\_by\_k} and \texttt{stability\_by\_k}.
+
+\subsection*{Pseudo-targets and residuals}
+For each constrained/observed time $t$ with dataset pool $\mathcal{D}_t=\{x_t^{(n)}\}_{n=1}^{N_t}$:
+\[
+\pi_{t,k}^{\mathrm{ps}}
+=
+\frac{1}{N_t}\sum_{n=1}^{N_t} q_k(x_t^{(n)}).
+\]
+For generated samples $\{\hat{x}_t^{(i)}(\theta)\}_{i=1}^{B}$:
+\[
+\hat{\pi}_{t,k}^{\mathrm{ps}}(\theta)
+=
+\frac{1}{B}\sum_{i=1}^{B} q_k\!\left(\hat{x}_t^{(i)}(\theta)\right).
+\]
+Pseudo residual vector at time $t$:
+\[
+r_t^{\mathrm{ps}}(\theta)=\hat{\pi}_t^{\mathrm{ps}}(\theta)-\pi_t^{\mathrm{ps}}.
+\]
+
+\subsection*{Hybrid constrained objective (moments + pseudo)}
+Constrained mode objective becomes
+\[
+\mathcal{L}_{\mathrm{constr}}
+=
+R(\theta)
++ \mathcal{L}_{\mathrm{AL,mom}}(\theta,\lambda)
++ \eta_{\mathrm{ps}}\,\mathcal{L}_{\mathrm{AL,ps}}(\theta,\nu).
+\]
+with
+\[
+\mathcal{L}_{\mathrm{AL,ps}}(\theta,\nu)
+=
+\sum_{t\in\mathcal{T}_c}\nu_t^\top r_t^{\mathrm{ps}}(\theta)
++ \frac{\rho_{\mathrm{ps}}}{2}\sum_{t\in\mathcal{T}_c}\|r_t^{\mathrm{ps}}(\theta)\|_2^2.
+\]
+Multiplier update:
+\[
+\nu_t\leftarrow
+\mathrm{clip}\!\left(
+\nu_t+\rho_{\mathrm{ps}}\,r_t^{\mathrm{ps}}(\theta),
+-\lambda_{\max}^{\mathrm{ps}},
+\lambda_{\max}^{\mathrm{ps}}
+\right).
+\]
+Backward compatibility: default \texttt{pseudo\_eta}=0.0 disables pseudo contribution.
+
+\subsection*{Metric-constrained variants with pseudo terms}
+\paragraph{AL variant (\texttt{metric\_constrained\_al})}
+\[
+\mathcal{L}_{A}^{\mathrm{metric\_AL+ps}}
+=
+\mathcal{L}_{\mathrm{LAND}}
++ \eta_{\mathrm{moment}}\mathcal{L}_{\mathrm{AL,mom}}
++ \eta_{\mathrm{ps}}\mathcal{L}_{\mathrm{AL,ps}}.
+\]
+\paragraph{Soft variant (\texttt{metric\_constrained\_soft})}
+\[
+\mathcal{L}_{A}^{\mathrm{metric\_soft+ps}}
+=
+\mathcal{L}_{\mathrm{LAND}}
++ \eta_{\mathrm{moment}}\frac{1}{|\mathcal{T}_c|}\sum_t\|c_t(\theta)\|_2^2
++ \eta_{\mathrm{ps}}\frac{1}{|\mathcal{T}_c|}\sum_t\|r_t^{\mathrm{ps}}(\theta)\|_2^2.
+\]
+
+\subsection*{Algorithm order (per training step)}
+\textbf{Preprocessing (once/run)}:
+\begin{enumerate}
+    \item fit/select/load GMM by BIC+stability;
+    \item freeze posterior $q_k(\cdot)$;
+    \item compute $\pi_t^{\mathrm{ps}}$ on observed constrained-time pools.
+\end{enumerate}
+\textbf{Stage A / Stage C constrained update}:
+\begin{enumerate}
+    \item sample endpoint pairs and times;
+    \item compute path samples at each constrained time;
+    \item compute moment residuals $c_t(\theta)$ and pseudo residuals $r_t^{\mathrm{ps}}(\theta)$;
+    \item assemble total objective (regularizer + moment term + pseudo term);
+    \item gradient step on trainable parameters;
+    \item update multipliers:
+    \[
+    \lambda_t\leftarrow\mathrm{clip}(\lambda_t+\rho\,c_t,\,-\lambda_{\max},\lambda_{\max}),
+    \quad
+    \nu_t\leftarrow\mathrm{clip}(\nu_t+\rho_{\mathrm{ps}}\,r_t^{\mathrm{ps}},\,-\lambda_{\max}^{\mathrm{ps}},\lambda_{\max}^{\mathrm{ps}}).
+    \]
+\end{enumerate}
+The same pseudo residual definitions are used for constrained and metric-constrained families.
+
 \section{Example Experiment Settings (Current Repository)}
 This section summarizes the experiment families currently implemented and logged in this repository.
 
@@ -488,9 +1036,9 @@ This section summarizes the experiment families currently implemented and logged
     \item \textbf{Representative output roots}: \texttt{outputs/hparam\_sweep/}, \texttt{outputs/ab\_only\_sweep/}, and timestamped comparison folders under \texttt{outputs/<date>/...}.
 \end{itemize}
 
-\subsection*{B. Bridge-SDE preview: Gaussian start with bridge-like stochastic dynamics}
+\subsection*{B. Bridge-SDE benchmark and preview utilities}
 \begin{itemize}
-    \item \textbf{Purpose}: geometry/diagnostic preview prior to training on more complex non-Gaussian trajectories.
+    \item \textbf{Purpose}: non-Gaussian-style benchmark family with bridge geometry, plus notebook diagnostics.
     \item \textbf{Initial law}: Gaussian $p_0=\mathcal{N}(\mu_0,\Sigma_0)$ from bridge-preview parameters.
     \item \textbf{Simulated dynamics} (from \texttt{bridge\_sde.py}):
     \[
@@ -503,13 +1051,15 @@ This section summarizes the experiment families currently implemented and logged
     \qquad
     g(x)=\exp\!\left(-\frac{(x-c)^2}{2w^2}\right).
     \]
-    \item \textbf{Current status}: used in notebook/preview artifacts (snapshots, spread plots, animation), not yet integrated as a full training target in the main Stage A/B/C experiment pipeline.
-    \item \textbf{Output root}: \texttt{outputs/preview\_bridge\_sde/<timestamp>/}.
+    \item \textbf{Current status}: integrated in training for Stage-A-only interpolant studies and Stage-A+B velocity-rollout comparisons (Stage C still not used in this bridge milestone).
+    \item \textbf{Training data configs}: \texttt{data=bridge\_ot} and \texttt{data=bridge\_random}.
+    \item \textbf{Typical training profile}: \texttt{train=stage\_a\_only} (interpolant-only) or \texttt{train=ab\_only} (A+B rollout metrics).
+    \item \textbf{Output roots}: training artifacts under \texttt{outputs/<date>/...}; preview utilities under \texttt{outputs/preview\_bridge\_sde/<timestamp>/}.
 \end{itemize}
 
 \paragraph{Scope note}
-At present, the optimization formalized in Sections 1--9 corresponds to the Gaussian-to-Gaussian benchmark pipeline.
-The Bridge-SDE path is currently a validated simulation/visualization track used to prepare future non-Gaussian training settings.
+The core optimization in Sections 1--9 is shared across Gaussian and bridge families.
+What differs by family is the target construction and evaluation contract (Gaussian moment-based transport metrics vs bridge empirical rollout OT metrics).
 
 \section{Practical Hyperparameters in the Loop}
 \begin{center}

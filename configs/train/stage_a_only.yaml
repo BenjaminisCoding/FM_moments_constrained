@@ -1,14 +1,14 @@
-label: default
+label: stage_a_only
 
-stage_a_steps: 200
-stage_b_steps: 300
-stage_c_steps: 100
+stage_a_steps: 300
+stage_b_steps: 0
+stage_c_steps: 0
 
 batch_size: 128
 eval_batch_size: 1024
 eval_transport_samples: 2000
 eval_transport_steps: 100
-eval_intermediate_empirical_w2: true
+eval_intermediate_empirical_w2: false
 eval_intermediate_ot_samples: 256
 eval_full_ot_metrics: false
 eval_full_ot_method: pot_emd2
@@ -26,9 +26,9 @@ beta_drift_p: 1.0
 beta_drift_eps: 1.0e-6
 beta_min_scale: 0.3
 beta_max_scale: 3.0
-rho: 5.0
+rho: 1.0
 eta_joint: 0.05
 lambda_clip: 100.0
 pseudo_eta: 0.0
-pseudo_rho: 5.0
+pseudo_rho: 1.0
 pseudo_lambda_clip: 100.0

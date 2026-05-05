@@ -12,8 +12,15 @@ from cfm_project.bridge_sde import (
 from cfm_project.plotting import (
     plot_bridge_snapshot_grid,
     plot_bridge_y_spread,
+    save_rollout_empirical_w2_bar_plot,
+    save_rollout_marginal_comparison_grid,
+    save_interpolant_marginal_comparison_grid,
+    save_interpolant_trajectory_comparison,
+    save_interpolant_w2_bar_plot,
     save_bridge_animation,
 )
+from cfm_project.models import PathCorrection
+from cfm_project.paths import corrected_path, linear_path
 
 matplotlib.use("Agg")
 
@@ -107,3 +114,83 @@ def test_bridge_plot_functions_write_artifacts(tmp_path: Path) -> None:
     assert snap_path.exists() and snap_path.stat().st_size > 0
     assert spread_path.exists() and spread_path.stat().st_size > 0
     assert gif_path.exists() and gif_path.stat().st_size > 0
+
+
+def test_interpolant_plot_functions_write_artifacts(tmp_path: Path) -> None:
+    torch.manual_seed(21)
+    x0 = torch.randn(96, 2)
+    x1 = torch.randn(96, 2)
+    g_model = PathCorrection(state_dim=2, hidden_dims=(16, 16))
+
+    traj_path = tmp_path / "interpolant_traj.png"
+    save_interpolant_trajectory_comparison(
+        x0=x0,
+        x1=x1,
+        path=traj_path,
+        g_model=g_model,
+        n_time_points=24,
+        max_paths=60,
+    )
+
+    times = [0.25, 0.5, 0.75]
+    linear_by_time: dict[float, torch.Tensor] = {}
+    learned_by_time: dict[float, torch.Tensor] = {}
+    target_by_time: dict[float, torch.Tensor] = {}
+    for t in times:
+        t_batch = torch.full((x0.shape[0], 1), t)
+        linear_t = linear_path(t_batch, x0, x1)
+        learned_t = corrected_path(t_batch, x0, x1, g_model)
+        linear_by_time[t] = linear_t
+        learned_by_time[t] = learned_t
+        target_by_time[t] = linear_t + 0.05 * torch.randn_like(linear_t)
+
+    grid_path = tmp_path / "interpolant_grid.png"
+    save_interpolant_marginal_comparison_grid(
+        linear_samples_by_time=linear_by_time,
+        learned_samples_by_time=learned_by_time,
+        target_samples_by_time=target_by_time,
+        path=grid_path,
+        bins=32,
+        max_points=400,
+    )
+
+    w2_path = tmp_path / "interpolant_w2.png"
+    save_interpolant_w2_bar_plot(
+        linear_empirical_w2={"0.25": 0.8, "0.50": 0.9, "0.75": 1.1},
+        learned_empirical_w2={"0.25": 0.6, "0.50": 0.7, "0.75": 0.8},
+        path=w2_path,
+    )
+
+    assert traj_path.exists() and traj_path.stat().st_size > 0
+    assert grid_path.exists() and grid_path.stat().st_size > 0
+    assert w2_path.exists() and w2_path.stat().st_size > 0
+
+
+def test_bridge_rollout_plot_functions_write_artifacts(tmp_path: Path) -> None:
+    torch.manual_seed(41)
+    times = [0.25, 0.5, 0.75, 1.0]
+    generated_by_time: dict[float, torch.Tensor] = {}
+    target_by_time: dict[float, torch.Tensor] = {}
+    for t in times:
+        generated = torch.randn(512, 2) + torch.tensor([2.0 * t, 0.0])
+        target = generated + 0.1 * torch.randn_like(generated)
+        generated_by_time[float(t)] = generated
+        target_by_time[float(t)] = target
+
+    grid_path = tmp_path / "rollout_grid.png"
+    save_rollout_marginal_comparison_grid(
+        generated_samples_by_time=generated_by_time,
+        target_samples_by_time=target_by_time,
+        path=grid_path,
+        bins=32,
+        max_points=400,
+    )
+
+    w2_path = tmp_path / "rollout_w2.png"
+    save_rollout_empirical_w2_bar_plot(
+        empirical_w2_by_time={"0.25": 0.4, "0.50": 0.6, "0.75": 0.7, "1.00": 0.9},
+        path=w2_path,
+    )
+
+    assert grid_path.exists() and grid_path.stat().st_size > 0
+    assert w2_path.exists() and w2_path.stat().st_size > 0

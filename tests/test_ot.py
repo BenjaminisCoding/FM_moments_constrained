@@ -1,6 +1,7 @@
 import torch
 
 from cfm_project.data import (
+    EmpiricalCouplingProblem,
     GaussianOTProblem,
     exact_discrete_ot_pairs,
     random_discrete_pairs,
@@ -58,3 +59,29 @@ def test_sample_coupled_batch_rejects_unknown_coupling() -> None:
         assert "Unsupported coupling" in str(exc)
     else:
         raise AssertionError("Expected ValueError for unsupported coupling mode.")
+
+
+def test_sample_coupled_batch_ot_global_respects_plan_weights() -> None:
+    x0_pool = torch.tensor([[0.0, 0.0], [10.0, 0.0]])
+    x1_pool = torch.tensor([[1.0, 0.0], [11.0, 0.0]])
+    problem = EmpiricalCouplingProblem(
+        x0_pool=x0_pool,
+        x1_pool=x1_pool,
+        global_ot_src_idx=torch.tensor([0, 1], dtype=torch.long),
+        global_ot_tgt_idx=torch.tensor([0, 1], dtype=torch.long),
+        global_ot_mass=torch.tensor([0.8, 0.2], dtype=torch.float32),
+    )
+
+    generator = torch.Generator(device="cpu").manual_seed(123)
+    x0, x1, _ = sample_coupled_batch(
+        problem=problem,
+        batch_size=4000,
+        coupling="ot_global",
+        generator=generator,
+    )
+
+    # Pair (0->0) has x0[:,0] near 0, pair (1->1) has x0[:,0] near 10.
+    first_pair_fraction = float((x0[:, 0] < 5.0).float().mean().item())
+    assert x0.shape == (4000, 2)
+    assert x1.shape == (4000, 2)
+    assert abs(first_pair_fraction - 0.8) < 0.05

@@ -1,0 +1,37 @@
+label: single_cell_eb_5d
+family: single_cell
+coupling: ot
+
+dim: 5
+constraint_times: []
+constraint_time_policy: observed_nonendpoint_excluding_holdout
+
+single_cell:
+  constraint_times_normalized: null
+  eval_times_normalized: null
+  path: ""
+  max_dim: 5
+  whiten: true
+  embed_key_npz: pcs
+  label_key_npz: sample_labels
+  embed_key_h5ad: X_pca
+  label_key_h5ad: day
+  global_ot_cache_enabled: true
+  global_ot_cache_dir: .cache/ot_plans
+  global_ot_force_recompute: false
+  global_ot_support_tol: 1.0e-12
+  global_ot_max_variables: null
+  pseudo_labels:
+    enabled: false
+    fit_times_normalized: null
+    k_min: 2
+    k_max: 10
+    seeds: [7, 11, 19]
+    n_init: 3
+    max_iter: 300
+    tol: 1.0e-3
+    reg_covar: 1.0e-6
+    stability_threshold: 0.7
+    cache_enabled: true
+    cache_dir: .cache/pseudo_labels
+    force_recompute: false

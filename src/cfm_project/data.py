@@ -52,6 +52,63 @@ class GaussianOTProblem:
         )
 
 
+@dataclass
+class EmpiricalCouplingProblem:
+    x0_pool: torch.Tensor
+    x1_pool: torch.Tensor
+    label: str = "empirical"
+    global_ot_src_idx: torch.Tensor | None = None
+    global_ot_tgt_idx: torch.Tensor | None = None
+    global_ot_mass: torch.Tensor | None = None
+    global_ot_total_cost: float | None = None
+
+    @property
+    def dim(self) -> int:
+        if self.x0_pool.ndim != 2 or self.x1_pool.ndim != 2:
+            raise ValueError(
+                f"Expected empirical pools with shape (N, d), got {self.x0_pool.shape} and {self.x1_pool.shape}"
+            )
+        if self.x0_pool.shape[1] != self.x1_pool.shape[1]:
+            raise ValueError(
+                f"Empirical pool dimensions mismatch: {self.x0_pool.shape} vs {self.x1_pool.shape}"
+            )
+        return int(self.x0_pool.shape[1])
+
+    @property
+    def has_global_ot_support(self) -> bool:
+        return (
+            self.global_ot_src_idx is not None
+            and self.global_ot_tgt_idx is not None
+            and self.global_ot_mass is not None
+            and self.global_ot_src_idx.numel() > 0
+            and self.global_ot_tgt_idx.numel() > 0
+            and self.global_ot_mass.numel() > 0
+        )
+
+    def to(self, device: torch.device, dtype: torch.dtype) -> "EmpiricalCouplingProblem":
+        src_idx = None
+        if self.global_ot_src_idx is not None:
+            src_idx = self.global_ot_src_idx.to(device=device, dtype=torch.long)
+        tgt_idx = None
+        if self.global_ot_tgt_idx is not None:
+            tgt_idx = self.global_ot_tgt_idx.to(device=device, dtype=torch.long)
+        mass = None
+        if self.global_ot_mass is not None:
+            mass = self.global_ot_mass.to(device=device, dtype=dtype)
+        return EmpiricalCouplingProblem(
+            x0_pool=self.x0_pool.to(device=device, dtype=dtype),
+            x1_pool=self.x1_pool.to(device=device, dtype=dtype),
+            label=self.label,
+            global_ot_src_idx=src_idx,
+            global_ot_tgt_idx=tgt_idx,
+            global_ot_mass=mass,
+            global_ot_total_cost=self.global_ot_total_cost,
+        )
+
+
+CouplingProblem = GaussianOTProblem | EmpiricalCouplingProblem
+
+
 def sample_gaussian(
     mean: torch.Tensor,
     cov: torch.Tensor,
@@ -120,6 +177,15 @@ def gaussian_moment_feature_vector(mean: torch.Tensor, cov: torch.Tensor) -> tor
     return torch.cat([mean, cov.reshape(-1)], dim=0)
 
 
+def moment_feature_vector_from_samples(x: torch.Tensor) -> torch.Tensor:
+    if x.ndim != 2:
+        raise ValueError(f"Expected x with shape (N, d), got {tuple(x.shape)}")
+    mean = x.mean(dim=0)
+    centered = x - mean
+    cov = centered.T @ centered / x.shape[0]
+    return gaussian_moment_feature_vector(mean, cov)
+
+
 def analytic_target_moment_features(
     times: Sequence[float],
     problem: GaussianOTProblem,
@@ -133,7 +199,7 @@ def analytic_target_moment_features(
 
 
 def sample_exact_ot_batch(
-    problem: GaussianOTProblem,
+    problem: CouplingProblem,
     batch_size: int,
     generator: torch.Generator | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, float]:
@@ -141,27 +207,81 @@ def sample_exact_ot_batch(
 
 
 def sample_random_batch(
-    problem: GaussianOTProblem,
+    problem: CouplingProblem,
     batch_size: int,
     generator: torch.Generator | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, float]:
     return sample_coupled_batch(problem=problem, batch_size=batch_size, coupling="random", generator=generator)
 
 
+def _sample_from_empirical_pool(
+    pool: torch.Tensor,
+    n_samples: int,
+    generator: torch.Generator | None = None,
+) -> torch.Tensor:
+    if pool.ndim != 2:
+        raise ValueError(f"Expected empirical pool with shape (N, d), got {tuple(pool.shape)}")
+    if n_samples <= 0:
+        raise ValueError(f"n_samples must be positive, got {n_samples}")
+    if pool.shape[0] <= 0:
+        raise ValueError("Empirical pool is empty.")
+    idx = torch.randint(
+        low=0,
+        high=pool.shape[0],
+        size=(n_samples,),
+        device=pool.device,
+        generator=generator,
+    )
+    return pool[idx]
+
+
 def sample_coupled_batch(
-    problem: GaussianOTProblem,
+    problem: CouplingProblem,
     batch_size: int,
     coupling: str,
     generator: torch.Generator | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, float]:
-    x0 = sample_gaussian(problem.mean0, problem.cov0, n_samples=batch_size, generator=generator)
-    x1 = sample_gaussian(problem.mean1, problem.cov1, n_samples=batch_size, generator=generator)
     coupling_name = coupling.lower()
+    if coupling_name == "ot_global":
+        if not isinstance(problem, EmpiricalCouplingProblem):
+            raise ValueError("coupling='ot_global' is only supported for empirical problems.")
+        if not problem.has_global_ot_support:
+            raise ValueError(
+                "coupling='ot_global' requested but EmpiricalCouplingProblem has no global OT support. "
+                "Prepare the dataset with a precomputed global OT plan."
+            )
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
+        if problem.global_ot_mass is None or problem.global_ot_src_idx is None or problem.global_ot_tgt_idx is None:
+            raise ValueError("Global OT support tensors are missing.")
+        support_probs = problem.global_ot_mass
+        support_probs = support_probs / torch.clamp(support_probs.sum(), min=torch.finfo(support_probs.dtype).eps)
+        support_choice = torch.multinomial(
+            support_probs,
+            num_samples=batch_size,
+            replacement=True,
+            generator=generator,
+        )
+        src_idx = problem.global_ot_src_idx[support_choice]
+        tgt_idx = problem.global_ot_tgt_idx[support_choice]
+        x0 = problem.x0_pool[src_idx]
+        x1 = problem.x1_pool[tgt_idx]
+        total_cost = float(torch.sum((x0 - x1) ** 2).item())
+        return x0, x1, total_cost
+
+    if isinstance(problem, GaussianOTProblem):
+        x0 = sample_gaussian(problem.mean0, problem.cov0, n_samples=batch_size, generator=generator)
+        x1 = sample_gaussian(problem.mean1, problem.cov1, n_samples=batch_size, generator=generator)
+    elif isinstance(problem, EmpiricalCouplingProblem):
+        x0 = _sample_from_empirical_pool(problem.x0_pool, n_samples=batch_size, generator=generator)
+        x1 = _sample_from_empirical_pool(problem.x1_pool, n_samples=batch_size, generator=generator)
+    else:
+        raise TypeError(f"Unsupported problem type: {type(problem)}")
     if coupling_name == "ot":
         return exact_discrete_ot_pairs(x0, x1)
     if coupling_name == "random":
         return random_discrete_pairs(x0, x1, generator=generator)
-    raise ValueError(f"Unsupported coupling '{coupling}'. Expected one of: ot, random.")
+    raise ValueError(f"Unsupported coupling '{coupling}'. Expected one of: ot, random, ot_global.")
 
 
 def to_problem_from_config(

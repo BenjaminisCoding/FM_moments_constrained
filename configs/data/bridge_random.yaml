@@ -1,0 +1,25 @@
+label: bridge_random
+family: bridge_sde
+coupling: random
+
+dim: 2
+constraint_times: [0.25, 0.50, 0.75]
+
+target_mc_samples: 200000
+target_cache_enabled: true
+target_cache_dir: .cache/bridge_targets
+
+bridge:
+  n_steps: 200
+  total_time: 1.5
+  mean0: [0.0, 0.0]
+  cov0:
+    - [0.35, 0.0]
+    - [0.0, 0.60]
+  vx: 2.0
+  sigma_x: 0.15
+  sigma_y: 0.45
+  bridge_center_x: 1.0
+  bridge_width: 0.35
+  bridge_pull: 8.0
+  bridge_diffusion_drop: 0.8

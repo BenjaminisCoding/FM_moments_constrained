@@ -1,16 +1,16 @@
-label: default
+label: single_cell_stage_a_only
 
-stage_a_steps: 200
-stage_b_steps: 300
-stage_c_steps: 100
+stage_a_steps: 120
+stage_b_steps: 0
+stage_c_steps: 0
 
-batch_size: 128
+batch_size: 256
 eval_batch_size: 1024
 eval_transport_samples: 2000
 eval_transport_steps: 100
-eval_intermediate_empirical_w2: true
+eval_intermediate_empirical_w2: false
 eval_intermediate_ot_samples: 256
-eval_full_ot_metrics: false
+eval_full_ot_metrics: true
 eval_full_ot_method: pot_emd2
 eval_full_ot_num_itermax: null
 eval_full_ot_max_variables: null

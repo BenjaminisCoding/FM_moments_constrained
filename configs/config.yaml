@@ -3,6 +3,7 @@ defaults:
   - data: gaussian_ot
   - model: default
   - train: default
+  - mfm: default
   - _self_
 
 seed: 7

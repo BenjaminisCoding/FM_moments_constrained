@@ -5,20 +5,28 @@ from typing import Callable
 import torch
 
 
-def moment_features_2d(x: torch.Tensor) -> torch.Tensor:
-    if x.ndim != 2 or x.shape[1] != 2:
-        raise ValueError(f"Expected x with shape (N, 2), got {tuple(x.shape)}")
+def moment_features(x: torch.Tensor) -> torch.Tensor:
+    if x.ndim != 2:
+        raise ValueError(f"Expected x with shape (N, d), got {tuple(x.shape)}")
+    if x.shape[0] <= 0:
+        raise ValueError("moment_features requires at least one sample.")
     mean = x.mean(dim=0)
     centered = x - mean
     cov = centered.T @ centered / x.shape[0]
     return torch.cat([mean, cov.reshape(-1)], dim=0)
 
 
+def moment_features_2d(x: torch.Tensor) -> torch.Tensor:
+    if x.ndim != 2 or x.shape[1] != 2:
+        raise ValueError(f"Expected x with shape (N, 2), got {tuple(x.shape)}")
+    return moment_features(x)
+
+
 def residual_from_samples(
     x: torch.Tensor,
     target_feature: torch.Tensor,
 ) -> torch.Tensor:
-    return moment_features_2d(x) - target_feature
+    return moment_features(x) - target_feature
 
 
 def constraint_residuals(
@@ -65,4 +73,3 @@ def update_lagrange_multipliers(
             new_lam = torch.clamp(new_lam, -clip_value, clip_value)
         updated[float(t)] = new_lam
     return updated
-

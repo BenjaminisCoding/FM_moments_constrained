@@ -10,12 +10,25 @@ eval_transport_samples: 128
 eval_transport_steps: 20
 eval_intermediate_empirical_w2: true
 eval_intermediate_ot_samples: 96
+eval_full_ot_metrics: false
+eval_full_ot_method: pot_emd2
+eval_full_ot_num_itermax: null
+eval_full_ot_max_variables: null
+eval_full_ot_support_tol: 1.0e-12
 
 lr_g: 0.001
 lr_v: 0.001
 
 alpha: 1.0
 beta: 0.05
+beta_schedule: constant
+beta_drift_p: 1.0
+beta_drift_eps: 1.0e-6
+beta_min_scale: 0.3
+beta_max_scale: 3.0
 rho: 5.0
 eta_joint: 0.05
 lambda_clip: 100.0
+pseudo_eta: 0.0
+pseudo_rho: 5.0
+pseudo_lambda_clip: 100.0

@@ -1,0 +1,9 @@
+backend: auto
+sigma: 0.1
+alpha: 1.0
+moment_eta: 1.0
+
+land_gamma: 0.125
+land_rho: 0.001
+land_metric_samples: 256
+reference_pool_policy: endpoints_only

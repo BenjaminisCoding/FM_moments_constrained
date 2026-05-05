@@ -1,4 +1,5 @@
 label: gaussian_ot
+family: gaussian
 coupling: ot
 
 dim: 2

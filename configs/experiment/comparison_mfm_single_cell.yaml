@@ -1,0 +1,7 @@
+mode: constrained
+run_both_modes: false
+comparison_methods: [baseline, constrained, metric, metric_alpha0, metric_constrained_al, metric_constrained_soft]
+label: comparison_mfm_single_cell
+protocol: strict_leaveout
+holdout_index: 2
+holdout_indices: [1, 2, 3]
