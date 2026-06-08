@@ -26,13 +26,6 @@ Nonlinear Drift SDE (synthetic bridge anatomy):
 |--- tests/                               # Unit/integration tests for core modules and script contracts
 |--- datasets/                            # Local single-cell .h5ad datasets used by empirical runs
 |--- outputs/                             # Run artifacts: comparison_mfm.json, summaries, tables, plots
-|--- Overleaf_paper/
-|    |--- neurips_2026.tex                # Main paper source
-|    `--- Images/                         # Paper figures reused in this README
-|--- ARCHITECTURE.md                      # System map and module interaction flow
-|--- PROJECT_STATE.md                     # Append-only chronological change/decision log
-|--- DISCUSSION.md                        # Method alternatives, tradeoffs, and rationale notes
-|--- EXPERIMENTS.md                       # Experiment index with output-folder traceability
 |--- TrajectoryNet/                       # External baseline repository (reference, not first-party architecture)
 |--- metric-flow-matching/                # External MFM baseline repository
 `--- conditional-flow-matching/           # External CFM baseline repository
@@ -124,13 +117,6 @@ Common artifacts to inspect:
 - `benchmark_summary_*.json`: aggregated benchmark metadata and metrics.
 - `tables/*.csv`, `tables/*.md`, `tables/*.tex`: paper-ready summary tables.
 - optional plots/exports from figure scripts under `outputs/paper_figures/...`.
-
-## Documentation Index
-
-- [ARCHITECTURE.md](ARCHITECTURE.md): system map, module roles, and flow.
-- [PROJECT_STATE.md](PROJECT_STATE.md): append-only project chronology and decisions.
-- [DISCUSSION.md](DISCUSSION.md): alternatives/tradeoffs and methodological notes.
-- [EXPERIMENTS.md](EXPERIMENTS.md): experiment index with output folder traceability.
 
 ## Citation
 

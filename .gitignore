@@ -11,6 +11,11 @@
 # Keep packaging/dependency metadata
 !pyproject.toml
 
+# Keep README-linked image assets
+!Overleaf_paper/
+!Overleaf_paper/Images/
+!Overleaf_paper/Images/*.png
+
 # Keep core project folders
 !configs/
 !configs/**
@@ -18,4 +23,3 @@
 !scripts/**
 !src/
 !src/**
-
