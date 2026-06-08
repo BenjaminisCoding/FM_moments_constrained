@@ -1,16 +1,16 @@
-label: single_cell_eb_5d
+label: single_cell_schiebinger_pilot_20d
 family: single_cell
-coupling: ot
+coupling: ot_global
 
-dim: 5
+dim: 20
 constraint_times: []
-constraint_time_policy: observed_nonendpoint_excluding_holdout
+constraint_time_policy: observed_nonendpoint_all
 
 single_cell:
-  constraint_times_normalized: null
-  eval_times_normalized: null
-  path: ""
-  max_dim: 5
+  constraint_times_normalized: [0.5]
+  eval_times_normalized: [0.5]
+  path: ${hydra:runtime.cwd}/datasets/schiebinger_serum_d10_d10p5_d11_hvg_pca50.h5ad
+  max_dim: 20
   whiten: true
   embed_key_npz: pcs
   label_key_npz: sample_labels
@@ -23,9 +23,9 @@ single_cell:
   global_ot_max_variables: null
   pseudo_labels:
     enabled: false
-    method: gmm
+    method: supervised_mlp
     posterior_temperature: 1.0
-    fit_times_normalized: null
+    fit_times_normalized: [0.5]
     supervised_label_key: cell_sets
     supervised_hidden_dims: [128, 128]
     supervised_activation: silu
@@ -34,6 +34,12 @@ single_cell:
     supervised_lr: 1.0e-3
     supervised_weight_decay: 1.0e-4
     supervised_seed: 7
+    supervised_min_class_count: 1
+    supervised_val_fraction: 0.0
+    supervised_split_seed: 7
+    supervised_early_stopping_patience: 20
+    supervised_early_stopping_min_epochs: 20
+    supervised_early_stopping_min_delta: 0.0
     supervised_logreg_c: 1.0
     supervised_logreg_penalty: l2
     supervised_logreg_max_iter: 1000

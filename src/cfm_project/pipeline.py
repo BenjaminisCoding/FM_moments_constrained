@@ -113,13 +113,18 @@ def _build_problem_and_targets(
             "pseudo_targets": None,
             "pseudo_posterior": None,
             "target_sampler": prepared.target_sampler,
-            "target_samples_by_time": None,
+            "target_samples_by_time": prepared.target_samples_by_time,
             "data_family": data_family,
             "data_build_meta": {
                 "target_cache_path": str(prepared.cache_path),
                 "target_cache_hit": bool(prepared.cache_hit),
                 "target_cache_enabled": bool(data_cfg.get("target_cache_enabled", True)),
                 "target_mc_samples": int(data_cfg.get("target_mc_samples", 200000)),
+                "bridge_global_ot_cache_path": prepared.global_ot_cache_path,
+                "bridge_global_ot_cache_hit": bool(prepared.global_ot_cache_hit),
+                "bridge_global_ot_support_size": prepared.global_ot_support_size,
+                "bridge_global_ot_total_cost": prepared.global_ot_total_cost,
+                "bridge_global_ot_solve_seconds": prepared.global_ot_solve_seconds,
             },
             "pseudo_summary_meta": {},
         }
@@ -169,15 +174,40 @@ def _build_problem_and_targets(
                 "single_cell_global_ot_cache_hit": bool(prepared.global_ot_cache_hit),
                 "single_cell_global_ot_support_size": prepared.global_ot_support_size,
                 "single_cell_global_ot_total_cost": prepared.global_ot_total_cost,
+                "single_cell_global_ot_solve_seconds": prepared.global_ot_solve_seconds,
                 "pseudo_labels_k": prepared.pseudo_labels_k,
+                "pseudo_labels_method": prepared.pseudo_labels_method,
                 "pseudo_labels_cache_path": prepared.pseudo_labels_cache_path,
                 "pseudo_labels_cache_hit": bool(prepared.pseudo_labels_cache_hit),
+                "pseudo_posterior_temperature": prepared.pseudo_posterior_temperature,
                 "single_cell_pseudo_fit_times": (
                     None
                     if prepared.pseudo_fit_times is None
                     else [float(t) for t in prepared.pseudo_fit_times]
                 ),
                 "single_cell_pseudo_fit_sample_count": prepared.pseudo_fit_sample_count,
+                "pseudo_supervised_kept_class_labels": (
+                    None
+                    if prepared.pseudo_supervised_kept_class_labels is None
+                    else [str(v) for v in prepared.pseudo_supervised_kept_class_labels]
+                ),
+                "pseudo_supervised_dropped_class_labels": (
+                    None
+                    if prepared.pseudo_supervised_dropped_class_labels is None
+                    else [str(v) for v in prepared.pseudo_supervised_dropped_class_labels]
+                ),
+                "pseudo_supervised_train_count": prepared.pseudo_supervised_train_count,
+                "pseudo_supervised_val_count": prepared.pseudo_supervised_val_count,
+                "pseudo_supervised_val_split_used": prepared.pseudo_supervised_val_split_used,
+                "pseudo_supervised_val_split_fallback": (
+                    prepared.pseudo_supervised_val_split_fallback
+                ),
+                "pseudo_supervised_epochs_trained": prepared.pseudo_supervised_epochs_trained,
+                "pseudo_supervised_best_epoch": prepared.pseudo_supervised_best_epoch,
+                "pseudo_supervised_best_val_loss": prepared.pseudo_supervised_best_val_loss,
+                "pseudo_supervised_early_stop_triggered": (
+                    prepared.pseudo_supervised_early_stop_triggered
+                ),
                 "bic_by_k": (
                     None
                     if prepared.pseudo_labels_bic_by_k is None
@@ -194,8 +224,10 @@ def _build_problem_and_targets(
             },
             "pseudo_summary_meta": {
                 "pseudo_labels_k": prepared.pseudo_labels_k,
+                "pseudo_labels_method": prepared.pseudo_labels_method,
                 "pseudo_labels_cache_path": prepared.pseudo_labels_cache_path,
                 "pseudo_labels_cache_hit": bool(prepared.pseudo_labels_cache_hit),
+                "pseudo_posterior_temperature": prepared.pseudo_posterior_temperature,
                 "single_cell_constraint_times": [float(t) for t in prepared.constraint_times],
                 "single_cell_eval_times": [float(t) for t in prepared.eval_times],
                 "single_cell_pseudo_fit_times": (
@@ -204,6 +236,28 @@ def _build_problem_and_targets(
                     else [float(t) for t in prepared.pseudo_fit_times]
                 ),
                 "single_cell_pseudo_fit_sample_count": prepared.pseudo_fit_sample_count,
+                "pseudo_supervised_kept_class_labels": (
+                    None
+                    if prepared.pseudo_supervised_kept_class_labels is None
+                    else [str(v) for v in prepared.pseudo_supervised_kept_class_labels]
+                ),
+                "pseudo_supervised_dropped_class_labels": (
+                    None
+                    if prepared.pseudo_supervised_dropped_class_labels is None
+                    else [str(v) for v in prepared.pseudo_supervised_dropped_class_labels]
+                ),
+                "pseudo_supervised_train_count": prepared.pseudo_supervised_train_count,
+                "pseudo_supervised_val_count": prepared.pseudo_supervised_val_count,
+                "pseudo_supervised_val_split_used": prepared.pseudo_supervised_val_split_used,
+                "pseudo_supervised_val_split_fallback": (
+                    prepared.pseudo_supervised_val_split_fallback
+                ),
+                "pseudo_supervised_epochs_trained": prepared.pseudo_supervised_epochs_trained,
+                "pseudo_supervised_best_epoch": prepared.pseudo_supervised_best_epoch,
+                "pseudo_supervised_best_val_loss": prepared.pseudo_supervised_best_val_loss,
+                "pseudo_supervised_early_stop_triggered": (
+                    prepared.pseudo_supervised_early_stop_triggered
+                ),
                 "bic_by_k": (
                     None
                     if prepared.pseudo_labels_bic_by_k is None
@@ -295,7 +349,7 @@ def _run_single_mode(
             )
         if (
             stage_a_only
-            and mode in {"constrained", *METRIC_MODES}
+            and mode in {"baseline", "constrained", *METRIC_MODES}
             and result.get("interpolant_artifacts") is not None
         ):
             artifacts = result["interpolant_artifacts"]
@@ -435,10 +489,10 @@ def run_pipeline(
     if methods:
         if bool(cfg_dict["experiment"].get("run_both_modes", False)):
             raise ValueError("experiment.comparison_methods cannot be used with run_both_modes=true.")
-        if stage_a_only and any(mode not in {"constrained", *METRIC_MODES} for mode in methods):
+        if stage_a_only and any(mode not in {"baseline", "constrained", *METRIC_MODES} for mode in methods):
             raise ValueError(
-                "train=stage_a_only only supports constrained and metric-family modes. "
-                "Allowed methods: constrained, metric, metric_alpha0, "
+                "train=stage_a_only supports baseline, constrained, and metric-family modes. "
+                "Allowed methods: baseline, constrained, metric, metric_alpha0, "
                 "metric_constrained_al, metric_constrained_soft."
             )
 
@@ -497,10 +551,10 @@ def run_pipeline(
         }
 
     mode = str(cfg_dict["experiment"]["mode"])
-    if stage_a_only and mode not in {"constrained", *METRIC_MODES}:
+    if stage_a_only and mode not in {"baseline", "constrained", *METRIC_MODES}:
         raise ValueError(
             "train=stage_a_only requires experiment.mode in "
-            "{constrained, metric, metric_alpha0, metric_constrained_al, metric_constrained_soft}."
+            "{baseline, constrained, metric, metric_alpha0, metric_constrained_al, metric_constrained_soft}."
         )
     single = _run_single_mode(cfg_dict, mode=mode, output_dir=out_root)
     return {"summary": single["summary"], "mode_dir": single["mode_dir"]}

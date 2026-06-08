@@ -1,12 +1,21 @@
-__pycache__/
-*.pyc
-.pytest_cache/
-outputs/
-.cache/
-.mplconfig/
-FM/
+# Ignore everything by default
+*
 
-# LaTeX build artifacts
-*.aux
-*.log
-missfont.log
+# Keep ignore rules file itself
+!.gitignore
+
+# Keep README
+!README*
+!Readme*
+
+# Keep packaging/dependency metadata
+!pyproject.toml
+
+# Keep core project folders
+!configs/
+!configs/**
+!scripts/
+!scripts/**
+!src/
+!src/**
+

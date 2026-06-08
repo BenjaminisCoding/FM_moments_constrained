@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -36,13 +37,26 @@ class SingleCellPreparedData:
     global_ot_cache_hit: bool
     global_ot_support_size: int | None
     global_ot_total_cost: float | None
+    global_ot_solve_seconds: float | None
     pseudo_labels_k: int | None
+    pseudo_labels_method: str | None
     pseudo_labels_cache_path: str | None
     pseudo_labels_cache_hit: bool
     pseudo_labels_bic_by_k: dict[int, float] | None
     pseudo_labels_stability_by_k: dict[int, float] | None
+    pseudo_posterior_temperature: float | None
     pseudo_fit_times: list[float] | None
     pseudo_fit_sample_count: int | None
+    pseudo_supervised_kept_class_labels: list[str] | None
+    pseudo_supervised_dropped_class_labels: list[str] | None
+    pseudo_supervised_train_count: int | None
+    pseudo_supervised_val_count: int | None
+    pseudo_supervised_val_split_used: bool | None
+    pseudo_supervised_val_split_fallback: bool | None
+    pseudo_supervised_epochs_trained: int | None
+    pseudo_supervised_best_epoch: int | None
+    pseudo_supervised_best_val_loss: float | None
+    pseudo_supervised_early_stop_triggered: bool | None
 
 
 def _normalize_time(index: int, n_times: int) -> float:
@@ -76,7 +90,7 @@ def _sort_unique_labels(labels: np.ndarray) -> list[Any]:
     return sorted(unique, key=lambda value: str(value))
 
 
-def _load_npz_dataset(path: str, cfg: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+def _load_npz_dataset(path: str, cfg: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]]:
     data = np.load(path, allow_pickle=True)
     embed_key = str(cfg.get("embed_key_npz", "pcs"))
     label_key = str(cfg.get("label_key_npz", "sample_labels"))
@@ -86,17 +100,28 @@ def _load_npz_dataset(path: str, cfg: Mapping[str, Any]) -> tuple[np.ndarray, np
         raise KeyError(f"Missing key '{label_key}' in NPZ dataset.")
     features = np.asarray(data[embed_key])
     labels = _as_1d_labels(np.asarray(data[label_key]))
-    return features, labels
+    return features, labels, {}
 
 
-def _load_h5ad_dataset(path: str, cfg: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+def _read_h5ad(path: str) -> Any:
+    try:
+        import anndata as ad
+    except ImportError:
+        ad = None
+    if ad is not None:
+        return ad.read_h5ad(path)
     try:
         import scanpy as sc
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise ImportError(
-            "Loading .h5ad datasets requires scanpy. Install scanpy to use single-cell h5ad inputs."
+            "Loading .h5ad datasets requires anndata or scanpy. "
+            "Install one of these packages to use single-cell h5ad inputs."
         ) from exc
-    adata = sc.read_h5ad(path)
+    return sc.read_h5ad(path)
+
+
+def _load_h5ad_dataset(path: str, cfg: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]]:
+    adata = _read_h5ad(path)
     embed_key = str(cfg.get("embed_key_h5ad", "X_pca"))
     label_key = str(cfg.get("label_key_h5ad", "day"))
     if embed_key not in adata.obsm:
@@ -105,10 +130,17 @@ def _load_h5ad_dataset(path: str, cfg: Mapping[str, Any]) -> tuple[np.ndarray, n
         raise KeyError(f"Missing label column '{label_key}' in adata.obs.")
     features = np.asarray(adata.obsm[embed_key])
     labels = _as_1d_labels(np.asarray(adata.obs[label_key]))
-    return features, labels
+    pseudo_cfg = cfg.get("pseudo_labels", {})
+    supervised_label_key = str(pseudo_cfg.get("supervised_label_key", "cell_sets"))
+    extra_obs_keys = {label_key, supervised_label_key}
+    obs_columns: dict[str, np.ndarray] = {}
+    for key in extra_obs_keys:
+        if key in adata.obs.columns:
+            obs_columns[key] = _as_1d_labels(np.asarray(adata.obs[key]))
+    return features, labels, obs_columns
 
 
-def _load_single_cell_dataset(data_cfg: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+def _load_single_cell_dataset(data_cfg: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]]:
     single_cfg = data_cfg.get("single_cell", {})
     path = str(single_cfg.get("path", "")).strip()
     if not path:
@@ -305,7 +337,7 @@ def _load_or_build_global_ot_support(
     sorted_labels: list[Any],
     x0_pool: torch.Tensor,
     x1_pool: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, str | None, bool]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, str | None, bool, float | None]:
     cache_enabled = bool(single_cfg.get("global_ot_cache_enabled", True))
     force_recompute = bool(single_cfg.get("global_ot_force_recompute", False))
     support_tol = float(single_cfg.get("global_ot_support_tol", 1e-12))
@@ -343,8 +375,12 @@ def _load_or_build_global_ot_support(
         if mass_sum <= 0.0:
             raise RuntimeError(f"Cached global OT mass is invalid in {cache_path}.")
         mass = mass / mass_sum
-        return src_idx, tgt_idx, mass, total_cost, str(cache_path), True
+        solve_seconds = payload.get("solve_seconds", None)
+        if solve_seconds is not None:
+            solve_seconds = float(solve_seconds)
+        return src_idx, tgt_idx, mass, total_cost, str(cache_path), True, solve_seconds
 
+    start = time.perf_counter()
     plan = solve_balanced_ot_lp(
         x=x0_pool.detach().cpu(),
         y=x1_pool.detach().cpu(),
@@ -353,6 +389,7 @@ def _load_or_build_global_ot_support(
         support_tol=support_tol,
         max_variables=max_variables,
     )
+    solve_seconds = float(time.perf_counter() - start)
     src_idx = torch.as_tensor(plan.src_idx, dtype=torch.long)
     tgt_idx = torch.as_tensor(plan.tgt_idx, dtype=torch.long)
     mass = torch.as_tensor(plan.mass, dtype=torch.float64)
@@ -367,10 +404,19 @@ def _load_or_build_global_ot_support(
                 "tgt_idx": tgt_idx,
                 "mass": mass,
                 "total_cost": total_cost,
+                "solve_seconds": float(solve_seconds),
             },
             cache_path,
         )
-    return src_idx, tgt_idx, mass, total_cost, (None if cache_path is None else str(cache_path)), False
+    return (
+        src_idx,
+        tgt_idx,
+        mass,
+        total_cost,
+        (None if cache_path is None else str(cache_path)),
+        False,
+        solve_seconds,
+    )
 
 
 def prepare_single_cell_problem_and_targets(
@@ -381,7 +427,7 @@ def prepare_single_cell_problem_and_targets(
 ) -> SingleCellPreparedData:
     single_cfg = data_cfg.get("single_cell", {})
     coupling = str(data_cfg.get("coupling", "ot")).strip().lower()
-    features_np, labels_np = _load_single_cell_dataset(data_cfg=data_cfg)
+    features_np, labels_np, obs_columns = _load_single_cell_dataset(data_cfg=data_cfg)
     if features_np.ndim != 2:
         raise ValueError(f"Expected feature matrix shape (N, d), got {features_np.shape}")
     if features_np.shape[0] != labels_np.shape[0]:
@@ -507,11 +553,47 @@ def prepare_single_cell_problem_and_targets(
     pseudo_labels_k: int | None = None
     pseudo_labels_cache_path: str | None = None
     pseudo_labels_cache_hit = False
+    pseudo_labels_method: str | None = None
     pseudo_labels_bic_by_k: dict[int, float] | None = None
     pseudo_labels_stability_by_k: dict[int, float] | None = None
+    pseudo_posterior_temperature: float | None = None
+    pseudo_supervised_kept_class_labels: list[str] | None = None
+    pseudo_supervised_dropped_class_labels: list[str] | None = None
+    pseudo_supervised_train_count: int | None = None
+    pseudo_supervised_val_count: int | None = None
+    pseudo_supervised_val_split_used: bool | None = None
+    pseudo_supervised_val_split_fallback: bool | None = None
+    pseudo_supervised_epochs_trained: int | None = None
+    pseudo_supervised_best_epoch: int | None = None
+    pseudo_supervised_best_val_loss: float | None = None
+    pseudo_supervised_early_stop_triggered: bool | None = None
     pseudo_cfg = single_cfg.get("pseudo_labels", {})
+    pseudo_method = str(pseudo_cfg.get("method", "gmm")).strip().lower()
+    if pseudo_method not in {"gmm", "supervised_mlp", "supervised_logreg"}:
+        raise ValueError(
+            f"Unsupported data.single_cell.pseudo_labels.method '{pseudo_method}'. "
+            "Expected one of: gmm, supervised_mlp, supervised_logreg."
+        )
+    supervised_label_key = str(pseudo_cfg.get("supervised_label_key", "cell_sets"))
+    supervised_labels_all: np.ndarray | None = None
+    if bool(pseudo_cfg.get("enabled", False)) and pseudo_method in {
+        "supervised_mlp",
+        "supervised_logreg",
+    }:
+        if supervised_label_key not in obs_columns:
+            raise KeyError(
+                "Supervised pseudo-label mode requires an observed label column in the loaded dataset. "
+                f"Missing '{supervised_label_key}'."
+            )
+        supervised_labels_all = _as_1d_labels(np.asarray(obs_columns[supervised_label_key]))
+        if supervised_labels_all.shape[0] != features_np.shape[0]:
+            raise ValueError(
+                "Supervised pseudo labels length mismatch: "
+                f"{supervised_labels_all.shape[0]} labels vs {features_np.shape[0]} features."
+            )
     pseudo_fit_times: list[float] | None = None
     pseudo_fit_sample_count: int | None = None
+    supervised_labels_for_pseudo: np.ndarray | None = None
     pseudo_fit_indices = list(all_time_indices)
     pseudo_fit_override_times = _parse_normalized_times(
         pseudo_cfg.get("fit_times_normalized", None),
@@ -529,19 +611,35 @@ def prepare_single_cell_problem_and_targets(
         fit_mask = np.isin(time_indices, fit_index_array)
         features_for_pseudo = np.asarray(features_np[fit_mask], dtype=np.float64)
         time_indices_for_pseudo = np.asarray(time_indices[fit_mask], dtype=np.int64)
+        if supervised_labels_all is not None:
+            supervised_labels_for_pseudo = _as_1d_labels(
+                np.asarray(supervised_labels_all[fit_mask])
+            )
         pseudo_fit_sample_count = int(features_for_pseudo.shape[0])
         if pseudo_fit_sample_count <= 0:
             raise ValueError(
                 "Pseudo-label fit subset is empty. "
                 "Check data.single_cell.pseudo_labels.fit_times_normalized."
             )
-        k_max = int(pseudo_cfg.get("k_max", 10))
-        if pseudo_fit_sample_count < k_max:
-            raise ValueError(
-                "Pseudo-label fit subset has too few samples: "
-                f"{pseudo_fit_sample_count} < k_max={k_max}. "
-                "Adjust fit_times_normalized or k_max."
-            )
+        if pseudo_method == "gmm":
+            k_max = int(pseudo_cfg.get("k_max", 10))
+            if pseudo_fit_sample_count < k_max:
+                raise ValueError(
+                    "Pseudo-label fit subset has too few samples: "
+                    f"{pseudo_fit_sample_count} < k_max={k_max}. "
+                    "Adjust fit_times_normalized or k_max."
+                )
+        if pseudo_method in {"supervised_mlp", "supervised_logreg"}:
+            if supervised_labels_for_pseudo is None:
+                raise ValueError(
+                    "Supervised pseudo-label mode requires supervised labels for fit subset."
+                )
+            n_classes = int(np.unique(supervised_labels_for_pseudo).shape[0])
+            if n_classes < 2:
+                raise ValueError(
+                    "Supervised pseudo-label mode requires at least 2 classes in fit subset, "
+                    f"got {n_classes}."
+                )
     else:
         features_for_pseudo = np.asarray(features_np, dtype=np.float64)
         time_indices_for_pseudo = np.asarray(time_indices, dtype=np.int64)
@@ -549,6 +647,7 @@ def prepare_single_cell_problem_and_targets(
         dataset_path=str(single_cfg.get("path", "")),
         features_np=features_for_pseudo,
         time_indices=time_indices_for_pseudo,
+        supervised_labels_np=supervised_labels_for_pseudo,
         single_cfg=single_cfg,
         device=device,
         dtype=dtype,
@@ -556,6 +655,7 @@ def prepare_single_cell_problem_and_targets(
     if pseudo_prepared is not None:
         pseudo_posterior = pseudo_prepared.posterior
         pseudo_labels_k = int(pseudo_prepared.selected_k)
+        pseudo_labels_method = str(pseudo_prepared.method)
         pseudo_labels_cache_path = pseudo_prepared.cache_path
         pseudo_labels_cache_hit = bool(pseudo_prepared.cache_hit)
         pseudo_labels_bic_by_k = {
@@ -564,11 +664,92 @@ def prepare_single_cell_problem_and_targets(
         pseudo_labels_stability_by_k = {
             int(k): float(v) for k, v in pseudo_prepared.stability_by_k.items()
         }
+        pseudo_posterior_temperature = float(pseudo_prepared.posterior_temperature)
+        pseudo_supervised_kept_class_labels = (
+            None
+            if pseudo_prepared.supervised_kept_class_labels is None
+            else [str(label) for label in pseudo_prepared.supervised_kept_class_labels]
+        )
+        pseudo_supervised_dropped_class_labels = (
+            None
+            if pseudo_prepared.supervised_dropped_class_labels is None
+            else [str(label) for label in pseudo_prepared.supervised_dropped_class_labels]
+        )
+        pseudo_supervised_train_count = (
+            None
+            if pseudo_prepared.supervised_train_count is None
+            else int(pseudo_prepared.supervised_train_count)
+        )
+        pseudo_supervised_val_count = (
+            None
+            if pseudo_prepared.supervised_val_count is None
+            else int(pseudo_prepared.supervised_val_count)
+        )
+        pseudo_supervised_val_split_used = (
+            None
+            if pseudo_prepared.supervised_val_split_used is None
+            else bool(pseudo_prepared.supervised_val_split_used)
+        )
+        pseudo_supervised_val_split_fallback = (
+            None
+            if pseudo_prepared.supervised_val_split_fallback is None
+            else bool(pseudo_prepared.supervised_val_split_fallback)
+        )
+        pseudo_supervised_epochs_trained = (
+            None
+            if pseudo_prepared.supervised_epochs_trained is None
+            else int(pseudo_prepared.supervised_epochs_trained)
+        )
+        pseudo_supervised_best_epoch = (
+            None
+            if pseudo_prepared.supervised_best_epoch is None
+            else int(pseudo_prepared.supervised_best_epoch)
+        )
+        pseudo_supervised_best_val_loss = (
+            None
+            if pseudo_prepared.supervised_best_val_loss is None
+            else float(pseudo_prepared.supervised_best_val_loss)
+        )
+        pseudo_supervised_early_stop_triggered = (
+            None
+            if pseudo_prepared.supervised_early_stop_triggered is None
+            else bool(pseudo_prepared.supervised_early_stop_triggered)
+        )
         pseudo_targets = {}
         with torch.no_grad():
             for idx in constraint_time_indices:
                 t_key = float(normalized_time_by_index[idx])
-                pseudo_targets[t_key] = pseudo_posterior(pools_by_index[idx]).mean(dim=0).detach()
+                if pseudo_prepared.method in {"supervised_mlp", "supervised_logreg"}:
+                    if supervised_labels_all is None:
+                        raise ValueError(
+                            "Supervised pseudo-label mode requires labels for all samples."
+                        )
+                    if pseudo_prepared.class_labels is None:
+                        raise ValueError(
+                            "Supervised pseudo-label mode requires class label metadata."
+                        )
+                    labels_at_t = _as_1d_labels(np.asarray(supervised_labels_all[time_indices == idx]))
+                    class_to_index = {
+                        str(label): i for i, label in enumerate(pseudo_prepared.class_labels)
+                    }
+                    counts = np.zeros((pseudo_labels_k,), dtype=np.float64)
+                    for label in labels_at_t.tolist():
+                        key = str(label)
+                        if key in class_to_index:
+                            counts[class_to_index[key]] += 1.0
+                    total = float(counts.sum())
+                    if total <= 0.0:
+                        raise ValueError(
+                            "Supervised pseudo-label target has zero mass at "
+                            f"time index {idx} (normalized t={t_key:.6f})."
+                        )
+                    pseudo_targets[t_key] = torch.as_tensor(
+                        counts / total,
+                        device=device,
+                        dtype=dtype,
+                    )
+                else:
+                    pseudo_targets[t_key] = pseudo_posterior(pools_by_index[idx]).mean(dim=0).detach()
 
     available_times = sorted(target_samples_by_time.keys())
 
@@ -589,6 +770,7 @@ def prepare_single_cell_problem_and_targets(
     global_ot_total_cost: float | None = None
     global_ot_cache_path: str | None = None
     global_ot_cache_hit = False
+    global_ot_solve_seconds: float | None = None
     if coupling == "ot_global":
         (
             global_ot_src_idx,
@@ -597,6 +779,7 @@ def prepare_single_cell_problem_and_targets(
             global_ot_total_cost,
             global_ot_cache_path,
             global_ot_cache_hit,
+            global_ot_solve_seconds,
         ) = _load_or_build_global_ot_support(
             single_cfg=single_cfg,
             data_cfg=data_cfg,
@@ -644,11 +827,24 @@ def prepare_single_cell_problem_and_targets(
         global_ot_cache_hit=bool(global_ot_cache_hit),
         global_ot_support_size=None if global_ot_mass is None else int(global_ot_mass.numel()),
         global_ot_total_cost=global_ot_total_cost,
+        global_ot_solve_seconds=global_ot_solve_seconds,
         pseudo_labels_k=pseudo_labels_k,
+        pseudo_labels_method=pseudo_labels_method,
         pseudo_labels_cache_path=pseudo_labels_cache_path,
         pseudo_labels_cache_hit=bool(pseudo_labels_cache_hit),
         pseudo_labels_bic_by_k=pseudo_labels_bic_by_k,
         pseudo_labels_stability_by_k=pseudo_labels_stability_by_k,
+        pseudo_posterior_temperature=pseudo_posterior_temperature,
         pseudo_fit_times=pseudo_fit_times,
         pseudo_fit_sample_count=pseudo_fit_sample_count,
+        pseudo_supervised_kept_class_labels=pseudo_supervised_kept_class_labels,
+        pseudo_supervised_dropped_class_labels=pseudo_supervised_dropped_class_labels,
+        pseudo_supervised_train_count=pseudo_supervised_train_count,
+        pseudo_supervised_val_count=pseudo_supervised_val_count,
+        pseudo_supervised_val_split_used=pseudo_supervised_val_split_used,
+        pseudo_supervised_val_split_fallback=pseudo_supervised_val_split_fallback,
+        pseudo_supervised_epochs_trained=pseudo_supervised_epochs_trained,
+        pseudo_supervised_best_epoch=pseudo_supervised_best_epoch,
+        pseudo_supervised_best_val_loss=pseudo_supervised_best_val_loss,
+        pseudo_supervised_early_stop_triggered=pseudo_supervised_early_stop_triggered,
     )

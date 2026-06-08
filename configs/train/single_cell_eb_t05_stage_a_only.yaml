@@ -1,4 +1,4 @@
-label: single_cell_stage_a_only
+label: single_cell_eb_t05_stage_a_only
 
 stage_a_steps: 120
 stage_b_steps: 0
@@ -10,9 +10,10 @@ eval_transport_samples: 2000
 eval_transport_steps: 100
 eval_intermediate_empirical_w2: false
 eval_intermediate_ot_samples: 256
+eval_empirical_w2_full_pool: false
 eval_full_ot_metrics: true
 eval_full_ot_method: pot_emd2
-eval_full_ot_num_itermax: null
+eval_full_ot_num_itermax: 1600000
 eval_full_ot_max_variables: null
 eval_full_ot_support_tol: 1.0e-12
 

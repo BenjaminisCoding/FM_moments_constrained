@@ -1,14 +1,14 @@
 label: single_cell_eb_5d
 family: single_cell
-coupling: ot
+coupling: ot_global
 
 dim: 5
 constraint_times: []
-constraint_time_policy: observed_nonendpoint_excluding_holdout
+constraint_time_policy: observed_nonendpoint_all
 
 single_cell:
-  constraint_times_normalized: null
-  eval_times_normalized: null
+  constraint_times_normalized: [0.5]
+  eval_times_normalized: [0.25, 0.5, 0.75, 1.0]
   path: ""
   max_dim: 5
   whiten: true
@@ -25,7 +25,7 @@ single_cell:
     enabled: false
     method: gmm
     posterior_temperature: 1.0
-    fit_times_normalized: null
+    fit_times_normalized: [0.5]
     supervised_label_key: cell_sets
     supervised_hidden_dims: [128, 128]
     supervised_activation: silu

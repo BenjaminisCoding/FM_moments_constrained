@@ -353,6 +353,7 @@ def _constrained_objective(
     rho: float,
     alpha: float,
     beta: float,
+    moment_eta: float = 1.0,
     beta_schedule: dict[str, Any] | None = None,
     pseudo_targets: dict[float, torch.Tensor] | None = None,
     pseudo_lambdas: dict[float, torch.Tensor] | None = None,
@@ -392,7 +393,7 @@ def _constrained_objective(
         g_model=g_model,
     )
     al_term, per_time = augmented_lagrangian_terms(residuals=residuals, lambdas=lambdas, rho=rho)
-    total = regularizer + al_term
+    total = regularizer + float(moment_eta) * al_term
     pseudo_residuals: dict[float, torch.Tensor] | None = None
     pseudo_term = torch.zeros((), device=x0.device, dtype=x0.dtype)
     pseudo_active = (
@@ -428,6 +429,7 @@ def _constrained_objective(
         "weighted_smoothness_term": float(weighted_smoothness.detach().item()),
         "beta_t_mean": float(beta_t.detach().mean().item()),
         "al_term": float(al_term.detach().item()),
+        "moment_eta": float(moment_eta),
         "pseudo_term": float(pseudo_term.detach().item()),
     }
     for t, value in per_time.items():
@@ -807,6 +809,51 @@ def _lookup_target_pool_by_time(
     )
 
 
+def _full_pool_target_sampler(
+    target_samples_by_time: dict[float, torch.Tensor],
+) -> Callable[[float, int, torch.Generator | None], torch.Tensor]:
+    def _sampler(
+        t: float,
+        n_samples: int,
+        generator: torch.Generator | None = None,
+    ) -> torch.Tensor:
+        del generator
+        pool = _lookup_target_pool_by_time(target_samples_by_time=target_samples_by_time, t=float(t))
+        if int(pool.shape[0]) != int(n_samples):
+            raise ValueError(
+                "Full-pool target sampler requires an exact pool-size match, "
+                f"got n_samples={int(n_samples)} but pool has {int(pool.shape[0])} samples for t={float(t):.2f}."
+            )
+        return pool
+
+    return _sampler
+
+
+def _global_ot_support_pairs(problem: EmpiricalCouplingProblem) -> tuple[torch.Tensor, torch.Tensor]:
+    if not problem.has_global_ot_support:
+        raise ValueError(
+            "Full-pool interpolant evaluation requires coupling='ot_global' with cached global OT support."
+        )
+    if problem.global_ot_src_idx is None or problem.global_ot_tgt_idx is None:
+        raise ValueError("Global OT support indices are missing.")
+    src_idx = problem.global_ot_src_idx.to(device=problem.x0_pool.device, dtype=torch.long)
+    tgt_idx = problem.global_ot_tgt_idx.to(device=problem.x1_pool.device, dtype=torch.long)
+    if src_idx.ndim != 1 or tgt_idx.ndim != 1:
+        raise ValueError("Global OT support indices must be 1D tensors.")
+    if src_idx.shape[0] != tgt_idx.shape[0]:
+        raise ValueError(
+            f"Global OT support index length mismatch: {tuple(src_idx.shape)} vs {tuple(tgt_idx.shape)}."
+        )
+    x0_support = problem.x0_pool[src_idx]
+    x1_support = problem.x1_pool[tgt_idx]
+    if x0_support.shape != x1_support.shape:
+        raise ValueError(
+            "Global OT support endpoint shapes mismatch after indexing, "
+            f"got {tuple(x0_support.shape)} vs {tuple(x1_support.shape)}."
+        )
+    return x0_support, x1_support
+
+
 def _eval_full_ot_rollout_metrics(
     problem: CouplingProblem,
     v_model: VelocityField,
@@ -869,6 +916,73 @@ def _eval_full_ot_rollout_metrics(
     return metrics, artifacts
 
 
+def _eval_empirical_rollout_metrics_full_pool(
+    problem: CouplingProblem,
+    v_model: VelocityField,
+    times: list[float],
+    n_steps: int,
+    target_samples_by_time: dict[float, torch.Tensor],
+    holdout_time: float | None = None,
+) -> tuple[dict[str, float | dict[str, float]], dict[str, Any]]:
+    if not isinstance(problem, EmpiricalCouplingProblem):
+        raise ValueError("Full-pool empirical rollout metrics require an EmpiricalCouplingProblem.")
+    eval_times_set = {float(t) for t in times} | {1.0}
+    if holdout_time is not None:
+        eval_times_set.add(float(holdout_time))
+    eval_times = sorted(eval_times_set)
+
+    x0_eval = problem.x0_pool
+    generated_by_time = euler_velocity_snapshots(
+        velocity_fn=v_model,
+        x0=x0_eval,
+        times=eval_times,
+        n_steps=n_steps,
+    )
+    target_by_time: dict[float, torch.Tensor] = {}
+    empirical_w2_by_time: dict[str, float] = {}
+    empirical_w1_by_time: dict[str, float] = {}
+    for t in eval_times:
+        t_value = float(t)
+        generated = generated_by_time[t_value]
+        target = _lookup_target_pool_by_time(target_samples_by_time=target_samples_by_time, t=t_value)
+        if generated.shape != target.shape:
+            raise ValueError(
+                "Full-pool empirical rollout evaluation requires equal-size generated/target pools. "
+                f"t={t_value:.2f}, generated={tuple(generated.shape)}, target={tuple(target.shape)}."
+            )
+        target_by_time[t_value] = target
+        empirical_w2_by_time[f"{t_value:.2f}"] = empirical_w2_distance(generated, target)
+        empirical_w1_by_time[f"{t_value:.2f}"] = empirical_w1_distance(generated, target)
+
+    intermediate = {f"{float(t):.2f}": empirical_w2_by_time[f"{float(t):.2f}"] for t in sorted(set(times))}
+    intermediate_w1 = {f"{float(t):.2f}": empirical_w1_by_time[f"{float(t):.2f}"] for t in sorted(set(times))}
+    intermediate_avg = float(sum(intermediate.values()) / len(intermediate)) if intermediate else 0.0
+    intermediate_w1_avg = (
+        float(sum(intermediate_w1.values()) / len(intermediate_w1)) if intermediate_w1 else 0.0
+    )
+    endpoint_w2 = float(empirical_w2_by_time["1.00"])
+    endpoint_w1 = float(empirical_w1_by_time["1.00"])
+    holdout_key = None if holdout_time is None else f"{float(holdout_time):.2f}"
+    metrics = {
+        "intermediate_empirical_w2": intermediate,
+        "intermediate_empirical_w2_avg": intermediate_avg,
+        "intermediate_empirical_w1": intermediate_w1,
+        "intermediate_empirical_w1_avg": intermediate_w1_avg,
+        "transport_endpoint_empirical_w2": endpoint_w2,
+        "transport_endpoint_empirical_w1": endpoint_w1,
+        "transport_score": endpoint_w2,
+        "holdout_empirical_w2": None if holdout_key is None else float(empirical_w2_by_time[holdout_key]),
+        "holdout_empirical_w1": None if holdout_key is None else float(empirical_w1_by_time[holdout_key]),
+    }
+    artifacts = {
+        "generated_by_time": _to_cpu_snapshot_dict(generated_by_time),
+        "target_by_time": _to_cpu_snapshot_dict(target_by_time),
+        "empirical_w2_by_time": {float(t): float(empirical_w2_by_time[f"{float(t):.2f}"]) for t in eval_times},
+        "empirical_w1_by_time": {float(t): float(empirical_w1_by_time[f"{float(t):.2f}"]) for t in eval_times},
+    }
+    return metrics, artifacts
+
+
 def _eval_empirical_rollout_metrics(
     problem: CouplingProblem,
     coupling: str,
@@ -909,7 +1023,7 @@ def _eval_empirical_rollout_metrics(
             raise ValueError(
                 f"target_sampler returned shape {target.shape} for t={t_value:.2f}, "
                 f"expected {generated.shape}"
-        )
+            )
         target_by_time[t_value] = target
         empirical_w2_by_time[f"{t_value:.2f}"] = empirical_w2_distance(generated, target)
         empirical_w1_by_time[f"{t_value:.2f}"] = empirical_w1_distance(generated, target)
@@ -1011,6 +1125,7 @@ def train_experiment(
         "stage_b_steps": int(train_cfg["stage_b_steps"]),
         "stage_c_steps": int(train_cfg["stage_c_steps"]),
     }
+    eval_empirical_w2_full_pool = bool(train_cfg.get("eval_empirical_w2_full_pool", False))
     eval_full_ot_metrics = bool(train_cfg.get("eval_full_ot_metrics", False))
     eval_full_ot_method = str(train_cfg.get("eval_full_ot_method", "pot_emd2")).strip().lower()
     if eval_full_ot_method not in {"exact_lp", "pot_emd2"}:
@@ -1035,6 +1150,9 @@ def train_experiment(
     pseudo_eta = float(train_cfg.get("pseudo_eta", 0.0))
     if pseudo_eta < 0.0:
         raise ValueError(f"train.pseudo_eta must be non-negative, got {pseudo_eta}")
+    train_moment_eta = float(train_cfg.get("moment_eta", 1.0))
+    if train_moment_eta < 0.0:
+        raise ValueError(f"train.moment_eta must be non-negative, got {train_moment_eta}")
     pseudo_rho = float(train_cfg.get("pseudo_rho", train_cfg.get("rho", 1.0)))
     if pseudo_rho <= 0.0:
         raise ValueError(f"train.pseudo_rho must be positive, got {pseudo_rho}")
@@ -1046,9 +1164,9 @@ def train_experiment(
             f"train.pseudo_lambda_clip must be positive, got {pseudo_lambda_clip}"
         )
 
-    if stage_a_only and mode not in {"constrained", *METRIC_MODES}:
+    if stage_a_only and mode not in {"baseline", "constrained", *METRIC_MODES}:
         raise ValueError(
-            "Stage-A-only profile requires one of: constrained, metric, metric_alpha0, "
+            "Stage-A-only profile requires one of: baseline, constrained, metric, metric_alpha0, "
             "metric_constrained_al, metric_constrained_soft."
         )
     if mode in METRIC_MODES and stage_steps["stage_c_steps"] > 0:
@@ -1141,6 +1259,7 @@ def train_experiment(
                 rho=float(train_cfg["rho"]),
                 alpha=float(train_cfg["alpha"]),
                 beta=float(train_cfg["beta"]),
+                moment_eta=float(train_moment_eta),
                 beta_schedule=constrained_beta_schedule,
                 pseudo_targets=pseudo_targets,
                 pseudo_lambdas=(pseudo_lambdas if pseudo_lambdas else None),
@@ -1335,6 +1454,7 @@ def train_experiment(
                 rho=float(train_cfg["rho"]),
                 alpha=float(train_cfg["alpha"]),
                 beta=float(train_cfg["beta"]),
+                moment_eta=float(train_moment_eta),
                 beta_schedule=constrained_beta_schedule,
                 pseudo_targets=pseudo_targets,
                 pseudo_lambdas=(pseudo_lambdas if pseudo_lambdas else None),
@@ -1432,6 +1552,7 @@ def train_experiment(
     interpolant_artifacts: dict[str, Any] | None = None
     interpolant_eval: dict[str, float | dict[str, float]] | None = None
     rollout_artifacts: dict[str, Any] | None = None
+    rollout_eval_times: list[float] | None = None
 
     if not stage_a_only:
         cfm_val, eval_path_energy = _eval_cfm_loss(
@@ -1445,21 +1566,47 @@ def train_experiment(
             generator=generator,
         )
         if data_family in {"bridge_sde", "single_cell"}:
-            if target_sampler is None:
-                raise ValueError(f"{data_family} non-Stage-A-only evaluation requires target_sampler.")
             holdout_time_raw = cfg.get("experiment", {}).get("holdout_time", None)
             holdout_time = None if holdout_time_raw is None else float(holdout_time_raw)
-            empirical_metrics, rollout_artifacts = _eval_empirical_rollout_metrics(
-                problem=problem,
-                coupling=coupling,
-                v_model=v_model,
-                times=times,
-                n_samples=int(train_cfg.get("eval_intermediate_ot_samples", 256)),
-                n_steps=int(train_cfg["eval_transport_steps"]),
-                target_sampler=target_sampler,
-                generator=generator,
-                holdout_time=holdout_time,
-            )
+            if interpolant_eval_times_override is not None:
+                rollout_eval_times = [
+                    float(t) for t in interpolant_eval_times_override if 0.0 < float(t) < 1.0
+                ]
+            else:
+                rollout_eval_times = [float(t) for t in times if 0.0 < float(t) < 1.0]
+            if holdout_time is not None and 0.0 < float(holdout_time) < 1.0:
+                rollout_eval_times.append(float(holdout_time))
+            rollout_eval_times = sorted({float(t) for t in rollout_eval_times})
+            if not rollout_eval_times:
+                rollout_eval_times = sorted({float(t) for t in times})
+            if eval_empirical_w2_full_pool:
+                if target_samples_by_time is None:
+                    raise ValueError(
+                        "train.eval_empirical_w2_full_pool=true requires target_samples_by_time "
+                        "for empirical data families."
+                    )
+                empirical_metrics, rollout_artifacts = _eval_empirical_rollout_metrics_full_pool(
+                    problem=problem,
+                    v_model=v_model,
+                    times=rollout_eval_times,
+                    n_steps=int(train_cfg["eval_transport_steps"]),
+                    target_samples_by_time=target_samples_by_time,
+                    holdout_time=holdout_time,
+                )
+            else:
+                if target_sampler is None:
+                    raise ValueError(f"{data_family} non-Stage-A-only evaluation requires target_sampler.")
+                empirical_metrics, rollout_artifacts = _eval_empirical_rollout_metrics(
+                    problem=problem,
+                    coupling=coupling,
+                    v_model=v_model,
+                    times=rollout_eval_times,
+                    n_samples=int(train_cfg.get("eval_intermediate_ot_samples", 256)),
+                    n_steps=int(train_cfg["eval_transport_steps"]),
+                    target_sampler=target_sampler,
+                    generator=generator,
+                    holdout_time=holdout_time,
+                )
             transport.update(empirical_metrics)
             if data_family == "single_cell" and eval_full_ot_metrics:
                 if target_samples_by_time is None:
@@ -1469,7 +1616,7 @@ def train_experiment(
                 full_ot_metrics, full_ot_artifacts = _eval_full_ot_rollout_metrics(
                     problem=problem,
                     v_model=v_model,
-                    times=times,
+                    times=rollout_eval_times,
                     n_steps=int(train_cfg["eval_transport_steps"]),
                     target_samples_by_time=target_samples_by_time,
                     holdout_time=holdout_time,
@@ -1536,12 +1683,26 @@ def train_experiment(
             interpolant_eval_times = sorted(
                 {float(t) for t in times} | ({float(holdout_time)} if holdout_time is not None else set())
             )
-        x0_eval, x1_eval, _ = sample_coupled_batch(
-            problem,
-            batch_size=int(train_cfg.get("eval_intermediate_ot_samples", 256)),
-            coupling=coupling,
-            generator=generator,
-        )
+        if eval_empirical_w2_full_pool:
+            if target_samples_by_time is None:
+                raise ValueError(
+                    "train.eval_empirical_w2_full_pool=true requires target_samples_by_time "
+                    "for Stage-A-only empirical evaluation."
+                )
+            if not isinstance(problem, EmpiricalCouplingProblem):
+                raise ValueError(
+                    "train.eval_empirical_w2_full_pool=true for Stage-A-only requires "
+                    "an EmpiricalCouplingProblem."
+                )
+            x0_eval, x1_eval = _global_ot_support_pairs(problem)
+            target_sampler_fn = _full_pool_target_sampler(target_samples_by_time=target_samples_by_time)
+        else:
+            x0_eval, x1_eval, _ = sample_coupled_batch(
+                problem,
+                batch_size=int(train_cfg.get("eval_intermediate_ot_samples", 256)),
+                coupling=coupling,
+                generator=generator,
+            )
         interpolant_eval = interpolant_empirical_w2_metrics(
             x0=x0_eval,
             x1=x1_eval,
@@ -1608,6 +1769,7 @@ def train_experiment(
         "stage_steps": stage_steps,
         "stage_a_only": bool(stage_a_only),
         "stage_c_enabled": bool(stage_steps["stage_c_steps"] > 0),
+        "eval_empirical_w2_full_pool": bool(eval_empirical_w2_full_pool),
         "eval_full_ot_metrics": bool(eval_full_ot_metrics),
         "eval_full_ot_method": str(eval_full_ot_method),
         "eval_full_ot_num_itermax": eval_full_ot_num_itermax,
@@ -1617,6 +1779,7 @@ def train_experiment(
         "interpolant_eval_times": (
             None if interpolant_eval_times_override is None else [float(t) for t in interpolant_eval_times_override]
         ),
+        "rollout_eval_times": (None if rollout_eval_times is None else [float(t) for t in rollout_eval_times]),
         "cfm_val_loss": cfm_val,
         "path_energy_proxy": eval_path_energy,
         "constraint_residual_norms": {f"{k:.2f}": v for k, v in eval_residuals.items()},
@@ -1632,6 +1795,7 @@ def train_experiment(
             else float(np.mean(list(eval_pseudo_residuals.values())))
         ),
         "pseudo_constraints_active": bool(pseudo_constraints_active),
+        "train_moment_eta": float(train_moment_eta),
         "pseudo_eta": float(pseudo_eta),
         "pseudo_rho": float(pseudo_rho),
         "pseudo_lambda_clip": float(pseudo_lambda_clip),
@@ -1644,12 +1808,16 @@ def train_experiment(
     if "holdout_time" in cfg.get("experiment", {}):
         summary["holdout_time"] = cfg["experiment"].get("holdout_time")
     if isinstance(problem, EmpiricalCouplingProblem):
+        summary["x0_pool_size"] = int(problem.x0_pool.shape[0])
+        summary["x1_pool_size"] = int(problem.x1_pool.shape[0])
         summary["global_ot_support_size"] = (
             None if problem.global_ot_mass is None else int(problem.global_ot_mass.numel())
         )
         summary["global_ot_total_cost"] = (
             None if problem.global_ot_total_cost is None else float(problem.global_ot_total_cost)
         )
+        if eval_empirical_w2_full_pool:
+            summary["eval_empirical_w2_full_pool_size"] = int(problem.x0_pool.shape[0])
     if mode == "constrained" and constrained_beta_schedule is not None:
         summary["beta_schedule"] = str(constrained_beta_schedule["name"])
         summary["beta_schedule_base"] = float(constrained_beta_schedule["base_beta"])

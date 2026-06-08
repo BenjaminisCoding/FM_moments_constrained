@@ -132,15 +132,27 @@ def exact_discrete_ot_pairs(
 ) -> tuple[torch.Tensor, torch.Tensor, float]:
     if x0.shape != x1.shape:
         raise ValueError(f"x0 and x1 must have same shape, got {x0.shape} and {x1.shape}")
+    row_idx, col_idx, total_cost = exact_discrete_ot_indices(x0=x0, x1=x1)
+    paired_x0 = x0[row_idx]
+    paired_x1 = x1[col_idx]
+    return paired_x0, paired_x1, total_cost
+
+
+def exact_discrete_ot_indices(
+    x0: torch.Tensor,
+    x1: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, float]:
+    if x0.shape != x1.shape:
+        raise ValueError(f"x0 and x1 must have same shape, got {x0.shape} and {x1.shape}")
     x0_np = x0.detach().cpu().numpy()
     x1_np = x1.detach().cpu().numpy()
     cost = ((x0_np[:, None, :] - x1_np[None, :, :]) ** 2).sum(axis=-1)
     row_ind, col_ind = linear_sum_assignment(cost)
     total_cost = float(cost[row_ind, col_ind].sum())
     device = x0.device
-    paired_x0 = x0[torch.as_tensor(row_ind, device=device)]
-    paired_x1 = x1[torch.as_tensor(col_ind, device=device)]
-    return paired_x0, paired_x1, total_cost
+    row_idx = torch.as_tensor(row_ind, device=device, dtype=torch.long)
+    col_idx = torch.as_tensor(col_ind, device=device, dtype=torch.long)
+    return row_idx, col_idx, total_cost
 
 
 def random_discrete_pairs(

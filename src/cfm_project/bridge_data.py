@@ -4,12 +4,17 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import time
 from typing import Any, Callable, Mapping, Sequence
 
 import torch
 
 from cfm_project.bridge_sde import sample_bridge_sde_at_times, simulate_bridge_sde_trajectories
-from cfm_project.data import EmpiricalCouplingProblem, moment_feature_vector_from_samples
+from cfm_project.data import (
+    EmpiricalCouplingProblem,
+    exact_discrete_ot_indices,
+    moment_feature_vector_from_samples,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -22,6 +27,11 @@ class BridgePreparedData:
     target_sampler: Callable[[float, int, torch.Generator | None], torch.Tensor]
     cache_path: Path
     cache_hit: bool
+    global_ot_cache_path: str | None
+    global_ot_cache_hit: bool
+    global_ot_support_size: int | None
+    global_ot_total_cost: float | None
+    global_ot_solve_seconds: float | None
 
 
 def _normalize_times(times: Sequence[float]) -> list[float]:
@@ -53,9 +63,11 @@ def _bridge_cache_key(
     target_mc_samples: int,
 ) -> tuple[str, dict[str, Any]]:
     bridge_cfg = data_cfg.get("bridge", {})
+    coupling = str(data_cfg.get("coupling", "ot")).strip().lower()
     key_payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "seed": int(seed),
+        "coupling": coupling,
         "constraint_times": [float(t) for t in _normalize_times(constraint_times)],
         "target_mc_samples": int(target_mc_samples),
         "bridge": {
@@ -101,6 +113,61 @@ def _serialize_tensor_dict(samples_by_time: Mapping[float, torch.Tensor]) -> dic
     }
 
 
+def _serialize_global_ot_support(
+    src_idx: torch.Tensor | None,
+    tgt_idx: torch.Tensor | None,
+    mass: torch.Tensor | None,
+    total_cost: float | None,
+    solve_seconds: float | None,
+) -> dict[str, Any] | None:
+    if src_idx is None or tgt_idx is None or mass is None:
+        return None
+    return {
+        "src_idx": src_idx.detach().cpu().to(dtype=torch.long).clone(),
+        "tgt_idx": tgt_idx.detach().cpu().to(dtype=torch.long).clone(),
+        "mass": mass.detach().cpu().to(dtype=torch.float32).clone(),
+        "total_cost": (None if total_cost is None else float(total_cost)),
+        "solve_seconds": (None if solve_seconds is None else float(solve_seconds)),
+    }
+
+
+def _deserialize_global_ot_support(
+    payload: Mapping[str, Any],
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float | None, float | None]:
+    src_idx = payload.get("src_idx")
+    tgt_idx = payload.get("tgt_idx")
+    mass = payload.get("mass")
+    if not isinstance(src_idx, torch.Tensor) or not isinstance(tgt_idx, torch.Tensor) or not isinstance(mass, torch.Tensor):
+        raise ValueError("Cached global OT payload is missing tensor keys: src_idx, tgt_idx, mass.")
+    src_idx_tensor = src_idx.to(device=device, dtype=torch.long)
+    tgt_idx_tensor = tgt_idx.to(device=device, dtype=torch.long)
+    mass_tensor = mass.to(device=device, dtype=dtype)
+    if src_idx_tensor.ndim != 1 or tgt_idx_tensor.ndim != 1 or mass_tensor.ndim != 1:
+        raise ValueError("Cached global OT support tensors must be 1D.")
+    if not (src_idx_tensor.shape[0] == tgt_idx_tensor.shape[0] == mass_tensor.shape[0]):
+        raise ValueError(
+            "Cached global OT support tensors must have equal length, got "
+            f"{tuple(src_idx_tensor.shape)}, {tuple(tgt_idx_tensor.shape)}, {tuple(mass_tensor.shape)}."
+        )
+    if int(mass_tensor.numel()) <= 0:
+        raise ValueError("Cached global OT support is empty.")
+    mass_sum = float(mass_tensor.sum().item())
+    if mass_sum <= 0.0:
+        raise ValueError("Cached global OT support has non-positive total mass.")
+    mass_tensor = mass_tensor / torch.clamp(
+        mass_tensor.sum(),
+        min=torch.finfo(mass_tensor.dtype).eps,
+    )
+    total_cost_raw = payload.get("total_cost")
+    solve_seconds_raw = payload.get("solve_seconds")
+    total_cost = None if total_cost_raw is None else float(total_cost_raw)
+    solve_seconds = None if solve_seconds_raw is None else float(solve_seconds_raw)
+    return src_idx_tensor, tgt_idx_tensor, mass_tensor, total_cost, solve_seconds
+
+
 def _select_time_key(available: Sequence[float], t: float, tol: float = 1e-4) -> float:
     candidates = [float(v) for v in available]
     best = min(candidates, key=lambda v: abs(v - float(t)))
@@ -134,6 +201,11 @@ def prepare_bridge_problem_and_targets(
 ) -> BridgePreparedData:
     bridge_cfg = data_cfg.get("bridge", {})
     constraint_times = _normalize_times(data_cfg.get("constraint_times", []))
+    coupling = str(data_cfg.get("coupling", "ot")).strip().lower()
+    if coupling not in {"ot", "random", "ot_global"}:
+        raise ValueError(
+            f"Unsupported bridge coupling '{coupling}'. Expected one of: ot, random, ot_global."
+        )
     total_time = float(bridge_cfg["total_time"])
     target_mc_samples = int(data_cfg.get("target_mc_samples", 200000))
     cache_enabled = bool(data_cfg.get("target_cache_enabled", True))
@@ -151,10 +223,35 @@ def prepare_bridge_problem_and_targets(
     )
     cache_path = cache_dir / f"{digest}.pt"
     cache_hit = cache_enabled and cache_path.exists()
+    global_ot_src_idx: torch.Tensor | None = None
+    global_ot_tgt_idx: torch.Tensor | None = None
+    global_ot_mass: torch.Tensor | None = None
+    global_ot_total_cost: float | None = None
+    global_ot_solve_seconds: float | None = None
 
     if cache_hit:
         payload = torch.load(cache_path, map_location="cpu")
+        payload_key = payload.get("key_payload")
+        if payload_key != key_payload:
+            raise RuntimeError(
+                "Bridge target cache key payload mismatch for existing cache file. "
+                f"Delete {cache_path} to recompute."
+            )
         samples_by_time = _tensor_dict_from_serialized(payload, device=device, dtype=dtype)
+        if coupling == "ot_global":
+            raw_ot_payload = payload.get("global_ot_support")
+            if raw_ot_payload is None or not isinstance(raw_ot_payload, dict):
+                raise RuntimeError(
+                    "Bridge cache hit requested coupling='ot_global' but cache payload "
+                    f"does not contain global OT support: {cache_path}"
+                )
+            (
+                global_ot_src_idx,
+                global_ot_tgt_idx,
+                global_ot_mass,
+                global_ot_total_cost,
+                global_ot_solve_seconds,
+            ) = _deserialize_global_ot_support(raw_ot_payload, device=device, dtype=dtype)
     else:
         generator = torch.Generator(device=device)
         generator.manual_seed(int(seed))
@@ -196,12 +293,43 @@ def prepare_bridge_problem_and_targets(
                 device=device,
                 dtype=dtype,
             )
+        if coupling == "ot_global":
+            x0_pool = samples_by_time[0.0]
+            x1_pool = samples_by_time[1.0]
+            if x0_pool.shape != x1_pool.shape:
+                raise ValueError(
+                    "coupling='ot_global' requires equal-size endpoint pools, got "
+                    f"{tuple(x0_pool.shape)} and {tuple(x1_pool.shape)}."
+                )
+            start = time.perf_counter()
+            src_idx, tgt_idx, total_cost = exact_discrete_ot_indices(x0=x0_pool, x1=x1_pool)
+            global_ot_solve_seconds = float(time.perf_counter() - start)
+            n_pairs = int(src_idx.numel())
+            if n_pairs <= 0:
+                raise RuntimeError("Global OT support is empty for bridge coupling='ot_global'.")
+            mass = torch.full(
+                (n_pairs,),
+                fill_value=1.0 / float(n_pairs),
+                device=device,
+                dtype=dtype,
+            )
+            global_ot_src_idx = src_idx.to(device=device, dtype=torch.long)
+            global_ot_tgt_idx = tgt_idx.to(device=device, dtype=torch.long)
+            global_ot_mass = mass
+            global_ot_total_cost = float(total_cost)
         if cache_enabled:
             cache_dir.mkdir(parents=True, exist_ok=True)
             torch.save(
                 {
                     "key_payload": key_payload,
                     "samples_by_time": _serialize_tensor_dict(samples_by_time),
+                    "global_ot_support": _serialize_global_ot_support(
+                        src_idx=global_ot_src_idx,
+                        tgt_idx=global_ot_tgt_idx,
+                        mass=global_ot_mass,
+                        total_cost=global_ot_total_cost,
+                        solve_seconds=global_ot_solve_seconds,
+                    ),
                 },
                 cache_path,
             )
@@ -225,6 +353,10 @@ def prepare_bridge_problem_and_targets(
         x0_pool=samples_by_time[0.0],
         x1_pool=samples_by_time[1.0],
         label=str(data_cfg.get("label", "bridge_sde")),
+        global_ot_src_idx=global_ot_src_idx,
+        global_ot_tgt_idx=global_ot_tgt_idx,
+        global_ot_mass=global_ot_mass,
+        global_ot_total_cost=global_ot_total_cost,
     )
     return BridgePreparedData(
         problem=problem,
@@ -233,4 +365,9 @@ def prepare_bridge_problem_and_targets(
         target_sampler=target_sampler,
         cache_path=cache_path,
         cache_hit=cache_hit,
+        global_ot_cache_path=(None if coupling != "ot_global" else str(cache_path)),
+        global_ot_cache_hit=(bool(cache_hit) if coupling == "ot_global" else False),
+        global_ot_support_size=(None if global_ot_mass is None else int(global_ot_mass.numel())),
+        global_ot_total_cost=global_ot_total_cost,
+        global_ot_solve_seconds=global_ot_solve_seconds,
     )

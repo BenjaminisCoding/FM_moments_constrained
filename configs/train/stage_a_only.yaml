@@ -29,6 +29,7 @@ beta_max_scale: 3.0
 rho: 1.0
 eta_joint: 0.05
 lambda_clip: 100.0
+moment_eta: 1.0
 pseudo_eta: 0.0
 pseudo_rho: 1.0
 pseudo_lambda_clip: 100.0
