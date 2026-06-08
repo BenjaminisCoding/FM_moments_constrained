@@ -118,11 +118,3 @@ Common artifacts to inspect:
 - `tables/*.csv`, `tables/*.md`, `tables/*.tex`: paper-ready summary tables.
 - optional plots/exports from figure scripts under `outputs/paper_figures/...`.
 
-## Citation
-
-If you use this repository in research:
-- Cite the associated paper source in `Overleaf_paper/neurips_2026.tex`.
-- Cite external baseline repositories when their methods/data pipelines are used:
-  - `TrajectoryNet/README.rst`
-  - `metric-flow-matching/README.md`
-  - `conditional-flow-matching/README.md`
