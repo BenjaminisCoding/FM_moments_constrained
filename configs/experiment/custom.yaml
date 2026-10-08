@@ -1,0 +1,6 @@
+mode: constrained
+run_both_modes: false
+label: custom
+protocol: strict_leaveout
+holdout_index: 2
+holdout_indices: [2]

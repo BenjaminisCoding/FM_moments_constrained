@@ -1,0 +1,32 @@
+{
+  "installation": "python -m pip install -e '.[observations,single-cell]'",
+  "commands": [
+    "python scripts/preprocess_data.py semrau --raw datasets/raw/semrau --download",
+    "python scripts/preprocess_data.py aerosol --raw datasets/raw/aerosol --download",
+    "python scripts/preprocess_data.py multi --raw datasets/raw/multi --download",
+    "python scripts/run_paper.py --data-root datasets/prepared prepare",
+    "python scripts/run_paper.py --data-root datasets/prepared train --benchmark semrau --method lin --seed 3 --out outputs/paper/semrau/lin/seed_3",
+    "python scripts/run_paper.py --data-root datasets/prepared evaluate --out outputs/paper/semrau/lin/seed_3"
+  ],
+  "output": "Default datasets/prepared; override with --out. Run dataset commands sequentially when sharing an output root. Existing dataset outputs are never overwritten; failed preprocessing leaves no partial dataset.",
+  "raw_files": "See sources.json for Semrau, EBAS and Multi download URLs and SHA256. Omit --download when files are already present. Files with incorrect checksums are rejected, never silently replaced.",
+  "multi": "Download op_train_multi_targets_0.h5ad (1.06 GB), Alexander Tong, Mendeley Data, DOI 10.17632/hhny5ff7yj.1, CC BY 4.0. The public file supplies PCA100. Preparation selects fixed subsets, fits endpoint standardization, solves OT, and computes empirical moments of the bundled constraint-day-trained classifier.",
+  "semrau": "GEO counts -> QC >=2000 UMI -> fixed endpoint splits -> endpoint-trained HVGs/PCA plus marker coordinates -> endpoint OT. Marker calibration hours: Sox2 [36,96], Tbx3 [24,60,96]. Calibration-data access is specified in the generated metadata.",
+  "aerosol": "EBAS DMPS/CPC/nephelometer measurements -> QC/alignment -> January-February optical-response calibration -> first valid day June1-7 -> endpoint-only scaling/quadrature and independent midpoint target.",
+  "scope": "Final real-data benchmarks only. Synthetic and auxiliary ablation arrays remain available in benchmark_data; these commands do not regenerate them.",
+  "information_budget": "Intermediate full samples are saved separately for evaluation/declared validation. LAND uses only endpoints. Preparation measures aggregates; model losses receive the aggregate targets.",
+  "new_dataset": {
+    "command": "python scripts/run_experiment.py data=custom experiment=custom train=ab_only data.single_cell.path=/absolute/path/to/data.npz data.dim=2",
+    "npz_schema": {
+      "features": "Finite numeric array of shape (N, d), containing the state coordinates.",
+      "time": "Numeric array of shape (N,), with one time label per row. This template expects five distinct, increasing snapshot labels."
+    },
+    "h5ad_schema": "Alternatively supply an H5AD with obsm[X_pca] and obs[day]. Override embed_key_h5ad and label_key_h5ad for other names.",
+    "preprocessing": "Provide already processed state coordinates. Fit any scaling or embedding on the endpoint training pools, then apply it to all snapshots; the template does not whiten across times.",
+    "protocol": "The first and last snapshots are endpoints. The second and fourth supply empirical mean constraints at normalized times 0.25 and 0.75. The middle snapshot at 0.5 is evaluation only. LAND references use endpoints only.",
+    "adaptation": "Edit configs/data/custom.yaml and configs/experiment/custom.yaml together for a different time grid or evaluation split. normalized_time_values must list the normalized physical times in sorted snapshot-label order. Set data.dim to the number of supplied coordinates.",
+    "moments": "The template constrains the state mean. Available moment blocks are defined in src/cfm_project/constraints.py; matching observed pools supply those empirical targets. For externally supplied aggregates or a learned observation map, construct EmpiricalCouplingProblem and call training.train_experiment with explicit targets/pseudo_targets and pseudo_posterior.",
+    "outputs": "run_experiment.py writes configuration, checkpoints and diagnostics under outputs/; override hydra.run.dir to choose a directory.",
+    "budget": "train=ab_only runs fixed Stage-A and Stage-B budgets. Choose budgets and validation rules for the new dataset before inspecting evaluation results."
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "stage_a_steps": 2400,
+  "stage_b_steps": 30000,
+  "validation_cadence": 300,
+  "clock_geometry_steps": 1200,
+  "clock_steps": 1200,
+  "clock_cadence": 150,
+  "clock_min_steps": 600,
+  "clock_strength": 4.0,
+  "stage_b_min_steps": 1200,
+  "stage_b_patience": 6,
+  "stage_b_min_delta": 0.001,
+  "reference_pool_policy": "endpoints_only"
+}

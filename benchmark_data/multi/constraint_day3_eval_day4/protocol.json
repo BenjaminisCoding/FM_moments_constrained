@@ -1,0 +1,64 @@
+{
+  "evaluation_kind": "velocity_rollout",
+  "days": [
+    2.0,
+    3.0,
+    4.0,
+    7.0
+  ],
+  "comparison": "Multi reciprocal constraint/validation days; fixed 2000-cell endpoint pools; physical time",
+  "classifier_arm": "early_stopped",
+  "evaluation_pool": 2000,
+  "sd_ddof": 0,
+  "preprocessing": "First 100 supplied PCA coordinates, standardized using the fixed endpoint pools.",
+  "seeds": [
+    3,
+    7,
+    11,
+    13,
+    17
+  ],
+  "tau": 0.2,
+  "target": [
+    0.036767408687432716,
+    0.15787186155191765,
+    0.252855157309675,
+    0.14338858157521497,
+    0.125436820240214,
+    0.07014316470297795,
+    0.21353700556574645
+  ],
+  "dimension": 100,
+  "endpoints": [
+    2000,
+    2000
+  ],
+  "evaluation_times": [
+    0.2,
+    0.4
+  ],
+  "sigma": 0.984179807327672,
+  "sigma_rule": "RMS within-endpoint standard deviation, pooled with equal endpoint weights; fixed before any empirical W2 evaluation",
+  "endpoint_hashes": [
+    "f397d60b7bd5cc2af93f133b60631c4f6952f353d9a1ac995eea1385e08ec89b",
+    "ff911e1f220cb73d4fa59f82d5c80bcc6ace235e78074f108d49cdb7ee6980ab"
+  ],
+  "temperature": 1.0,
+  "target_source": "Full constraint-day mean of the frozen classifier posterior",
+  "information_budget": "Endpoint samples and OT coupling; a frozen classifier trained on the constraint day; seven empirical classifier-posterior means. Full constraint-day cells are used to prepare the observation, while path training receives its aggregate. LAND references use endpoints only.",
+  "classifier_fit_times": [
+    0.2
+  ],
+  "schema": "empirical_classifier_moment_v1",
+  "target_kind": "posterior_mean",
+  "target_definition": "a_tau = (1 / N_tau) sum_i softmax(logits(x_i) / temperature)",
+  "observation_sample_count": 8544,
+  "empirical_only": true,
+  "training_sha256": {
+    "training_inputs.npz": "929959cf2991a10793e525b71bd1964fefb252d567a7fc50f9a98b01f26a3476",
+    "classifier.pt": "c649a78fe59d5027c51511bb6fd885d0182d224dbef63a5725a130d6fd979d2b",
+    "endpoint_coupling.npz": "4291e6a258287083bc8802dcc965d93233d8312e89f0657be788967112e2ef42"
+  },
+  "endpoint_coupling": "ot_global",
+  "training_configuration": "configs/paper/multi"
+}

@@ -1,0 +1,50 @@
+label: bridge_global_ot_3k_stage_a_only
+init_seed: null
+batch_seed: null
+time_seed: null
+
+stage_a_steps: 300
+stage_b_steps: 0
+stage_c_steps: 0
+
+batch_size: 256
+eval_batch_size: 1024
+eval_transport_samples: 4000
+eval_transport_steps: 100
+eval_intermediate_empirical_w2: false
+eval_intermediate_ot_samples: 256
+eval_empirical_w2_full_pool: true
+eval_full_ot_metrics: false
+eval_full_ot_method: pot_emd2
+eval_full_ot_num_itermax: null
+eval_full_ot_max_variables: null
+eval_full_ot_support_tol: 1.0e-12
+stage_b_early_stopping_enabled: false
+stage_b_early_stopping_check_every: 50
+stage_b_early_stopping_warmup_steps: 300
+stage_b_early_stopping_patience: 6
+stage_b_early_stopping_min_delta: 0.0
+stage_b_early_stopping_min_delta_rel: 0.001
+stage_b_early_stopping_eval_batch_size: 1024
+stage_b_early_stopping_eval_batches: 3
+stage_b_early_stopping_restore_best: true
+stage_b_early_stopping_seed: null
+
+lr_g: 0.001
+lr_v: 0.001
+
+alpha: 1.0
+beta: 0.05
+beta_schedule: constant
+beta_drift_p: 1.0
+beta_drift_eps: 1.0e-6
+beta_min_scale: 0.3
+beta_max_scale: 3.0
+rho: 0.5
+eta_joint: 0.05
+lambda_clip: 100.0
+moment_eta: 1.0
+moment_block_normalization: none
+pseudo_eta: 0.0
+pseudo_rho: 5.0
+pseudo_lambda_clip: 100.0

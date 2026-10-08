@@ -1,0 +1,39 @@
+{
+  "hidden": [
+    128,
+    128
+  ],
+  "velocity_hidden": [
+    128,
+    128,
+    128
+  ],
+  "activation": "silu",
+  "alpha": 1.0,
+  "beta": 0.0,
+  "quadrature_times": 24,
+  "land_gamma": 0.35,
+  "land_rho": 0.01,
+  "land_max_references": 256,
+  "warmup_steps": 100,
+  "warmup_lr": 0.001,
+  "outer_steps": 240,
+  "inner_steps": 40,
+  "primal_lr": 0.8,
+  "lbfgs_history": 20,
+  "rho": 0.001,
+  "rho_factor": 1.0,
+  "rho_max": 100000.0,
+  "multiplier_clip": 100000.0,
+  "residual_tolerance": 0.0001,
+  "stationarity_tolerance": 0.05,
+  "stage_b_steps": 30000,
+  "stage_b_batch": 256,
+  "stage_b_lr": 0.001,
+  "stage_b_log_every": 1500,
+  "sigma": 0.5,
+  "threads": 1,
+  "quadrature_sampling_mix": 0.5,
+  "csb_quadrature": 64,
+  "csb_max_quadrature": 256
+}

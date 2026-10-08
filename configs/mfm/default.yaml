@@ -1,0 +1,18 @@
+backend: auto
+sigma: 0.1
+alpha: 1.0
+moment_eta: 1.0
+
+geopath_metric: land
+land_gamma: 0.125
+land_rho: 0.001
+land_metric_samples: 256
+reference_pool_policy: endpoints_only
+
+rbf_n_centers: 100
+rbf_kappa: 1.0
+rbf_epsilon: 0.001
+rbf_alpha_metric: 1.0
+rbf_metric_epochs: 50
+rbf_lr: 0.01
+rbf_seed: 998

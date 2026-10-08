@@ -1,0 +1,20 @@
+{
+  "velocity_width": 128,
+  "velocity_depth": 3,
+  "velocity_activation": "silu",
+  "batch": 256,
+  "stage_b_cap": 18000,
+  "stage_b_min": 3000,
+  "lr_b": 0.001,
+  "ema_decay": 0.99,
+  "validation_cadence": 600,
+  "stage_b_input_noise": 0.01,
+  "validation_draws": 8,
+  "final_draws": 32,
+  "sensitivity_draws": 64,
+  "ode_steps_validation": 96,
+  "ode_steps_final": 192,
+  "ode_steps_check": 384,
+  "diagnostic_size": 4096,
+  "threads": 1
+}

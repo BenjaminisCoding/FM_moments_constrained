@@ -1,0 +1,46 @@
+{
+  "semrau": [
+    {
+      "filename": "GSE79578_RAW.tar",
+      "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE79nnn/GSE79578/suppl/GSE79578_RAW.tar",
+      "sha256": "c1ec5ae79482087ee15dd7b0a8f26787dde75ee992cce63f5d9181e370b1bd43"
+    },
+    {
+      "filename": "GSE79578_bulkRNAseq.txt.gz",
+      "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE79nnn/GSE79578/suppl/GSE79578_bulkRNAseq.txt.gz",
+      "sha256": "4eb8a6ac32aba6e01f74751904bf8a2e2f75e338d28da7ee948ea4b47a6e9287"
+    }
+  ],
+  "aerosol": [
+    {
+      "filename": "FI0050R.20120101000000.20181205100800.dmps...1y.1h.FI03L_UHEL_DMPS_HYY_01.FI03L__TRY_TDMPS.lev2.nc",
+      "url": "https://thredds.nilu.no/thredds/fileServer/ebas/FI0050R.20120101000000.20181205100800.dmps...1y.1h.FI03L_UHEL_DMPS_HYY_01.FI03L__TRY_TDMPS.lev2.nc",
+      "sha256": "4fc2a7a59647b5baff752ddf40c89800cd5a57c7080664f11e924d464663724d"
+    },
+    {
+      "filename": "FI0050R.20120101000000.20140501000000.cpc.particle_number_concentration..6mo.1h.FI03L_CPC_HYY_01.FI03L_CPC.lev2.nc",
+      "url": "https://thredds.nilu.no/thredds/fileServer/ebas/FI0050R.20120101000000.20140501000000.cpc.particle_number_concentration..6mo.1h.FI03L_CPC_HYY_01.FI03L_CPC.lev2.nc",
+      "sha256": "209d37e4bdf355b19c0bd8351103a70eda6db7f6040613c52a034c8e245cc3da"
+    },
+    {
+      "filename": "FI0050R.20100608000100.20190702121209.nephelometer..pm1.8y.1h.FI03L_TSI_3563_pm1.FI03L_neph_control_lev2_ver2.lev2.nc",
+      "url": "https://thredds.nilu.no/thredds/fileServer/ebas/FI0050R.20100608000100.20190702121209.nephelometer..pm1.8y.1h.FI03L_TSI_3563_pm1.FI03L_neph_control_lev2_ver2.lev2.nc",
+      "sha256": "0e44b3a09648f659addfa77ca45f899941e8835baae299207b3ea08fa2851ebe"
+    }
+  ],
+  "multi": [
+    {
+      "filename": "op_train_multi_targets_0.h5ad",
+      "url": "https://data.mendeley.com/public-files/datasets/hhny5ff7yj/files/5f4b6e5b-f122-4f5a-8ede-0d188c5cf00c/file_downloaded",
+      "sha256": "a16c28ef861503111bb2f4c6ab6b1d5ed3df07d49eb0baa7378515fc098af4d2",
+      "size_bytes": 1059236146,
+      "dataset_url": "https://data.mendeley.com/datasets/hhny5ff7yj/1",
+      "doi": "10.17632/hhny5ff7yj.1",
+      "creator": "Alexander Tong",
+      "title": "Processed Single-cell RNA Time Series DAta",
+      "license": "CC BY 4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "discovered_via": "https://github.com/kkapusniak/metric-flow-matching#datasets"
+    }
+  ]
+}

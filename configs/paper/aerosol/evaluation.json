@@ -1,0 +1,12 @@
+{
+  "ode_steps": 400,
+  "native_samples": 32768,
+  "primary": "Mean normalized W2 at t=0.25 and0.75; equal episode weighting",
+  "secondary": "W2 in physical diameter nm for aerosol domains",
+  "uncertainty": "Sample SD across the five seed means, each averaged across the two episodes; not uncertainty across atmospheric or traffic populations",
+  "population_quadrature_factor": 4,
+  "aerosol_truth": "Exact W2 against measured histograms, with the same uniform-within-log-bin assumption used by preparation",
+  "aerosol_endpoint_representation": "Common endpoint-CDF Gaussian quadrature at four times the original order for all rollout/deterministic-teacher methods; native CSB retains its fitted quadrature",
+  "truth_feature_quadrature_per_log_bin": 32,
+  "qualitative_seed": 3
+}

@@ -1,0 +1,27 @@
+# Five snapshots with supplied, endpoint-preprocessed state coordinates.
+label: custom
+family: single_cell
+coupling: ot_global
+dim: 2
+constraint_times: []
+constraint_time_policy: observed_nonendpoint_excluding_holdout
+moment_feature_blocks: [mean]
+moment_feature_params: {}
+
+single_cell:
+  path: ???
+  max_dim: ${data.dim}
+  whiten: false
+  embed_key_npz: features
+  label_key_npz: time
+  embed_key_h5ad: X_pca
+  label_key_h5ad: day
+  normalized_time_values: [0.0, 0.25, 0.5, 0.75, 1.0]
+  constraint_times_normalized: [0.25, 0.75]
+  eval_times_normalized: [0.5]
+  global_ot_cache_enabled: true
+  global_ot_cache_dir: .cache/ot_plans
+  global_ot_support_tol: 1.0e-12
+  global_ot_max_variables: 4000000
+  pseudo_labels:
+    enabled: false

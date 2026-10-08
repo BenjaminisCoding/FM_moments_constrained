@@ -1,0 +1,31 @@
+# Publish project source, runnable configurations, tests, prepared inputs and README.
+/*
+!/.gitignore
+!/pyproject.toml
+!/requirements-reproduction.txt
+!/src/
+!/scripts/
+!/configs/
+!/tests/
+!/benchmark_data/
+
+# Generated files inside publication folders.
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.cache/
+.DS_Store
+*.log
+*.tmp
+*.part
+
+# Research notes and manuscript documents stay local, wherever they are stored.
+*.md
+*.MD
+*.pdf
+*.PDF
+
+# Public quickstart (overrides the Markdown exclusion above).
+!/README.md

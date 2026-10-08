@@ -1,0 +1,110 @@
+{
+  "setup": "sox2_tbx3_6h",
+  "endpoints": [
+    0,
+    36
+  ],
+  "hours": [
+    0,
+    6,
+    12,
+    24,
+    36
+  ],
+  "constraint_hour": 6,
+  "unconstrained_hours": [
+    12,
+    24
+  ],
+  "tau": 0.16666666666666666,
+  "markers": [
+    "Sox2",
+    "Tbx3",
+    "Nanog",
+    "Ppia"
+  ],
+  "matrix": [
+    [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0
+    ]
+  ],
+  "target": [
+    0.9065886988855698,
+    1.3858099750502924
+  ],
+  "normalization": [
+    0.9065886988855698,
+    1.3858099750502924
+  ],
+  "observations": [
+    {
+      "gene": "Sox2",
+      "calibration_hours": [
+        36,
+        96
+      ],
+      "target_raw_UMI": 2.5932653479750023
+    },
+    {
+      "gene": "Tbx3",
+      "calibration_hours": [
+        24,
+        60,
+        96
+      ],
+      "target_raw_UMI": 1.1086479800402338
+    }
+  ],
+  "marker_scale": [
+    1.6912909614489962,
+    0.8944271909999159,
+    1.9671724484295894,
+    3.792894213081602
+  ],
+  "endpoint_cells": [
+    197,
+    233
+  ],
+  "support": 45901,
+  "representation": "8 endpoint-trained PCs +4 exact marker coordinates; all12 dimensions retained",
+  "interpretation": "Bulk-calibrated marker moments; reported scores are calibration-dependent evaluations.",
+  "coupling": {
+    "epsilon": 64.0,
+    "type": "balanced global entropic squared-Euclidean OT",
+    "support": 45901,
+    "threshold": 1e-14,
+    "discarded_mass": 0.0,
+    "max_row_error": 6.938893903907228e-18,
+    "max_column_error": 4.336808689942018e-18,
+    "transport_cost": 21.630327593391364,
+    "mutual_information": 0.0042749415916452675,
+    "train_sha256": "3e17d4d00ed09ebf31fe2d9cb2a440b2a9beec49043fb6b43c905a9bbb7267b9",
+    "information": "Endpoint training cells only."
+  },
+  "calibration_selection_pool": "Constraint-time single-cell means"
+}

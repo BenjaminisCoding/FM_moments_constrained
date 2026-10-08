@@ -1,0 +1,16 @@
+path_alpha: 1.0
+sigma: 0.0
+velocity_scale: 1.0
+
+reference_pool_policy: endpoints_only
+reference_pool_max_samples_per_time: null
+reference_k: 20
+
+cosine_weight: 1.0
+l2_weight: 1.0
+l2_mu_dot_scale: 1.0
+moment_eta: 1.0
+
+stage_b_coupling: same
+learned_coupling_num_times: 1
+learned_coupling_chunk_size: 32

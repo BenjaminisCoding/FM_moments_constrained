@@ -1,0 +1,13 @@
+{
+  "repeat": 5,
+  "n": 16,
+  "observation_seed": 100017,
+  "mean": [
+    1.491464314982295,
+    0.9296336360275745
+  ],
+  "variance_y": 0.05218054865534076,
+  "standard_y": 0.22843062109826862,
+  "gaussian_ridge": 1.826687197411754e-07,
+  "observations_sha256": "d360f07349ec84978cfaacf79da6a9b25fe9db3011abfb5143db956981e0c400"
+}

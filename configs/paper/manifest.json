@@ -1,0 +1,120 @@
+{
+  "schema": 2,
+  "paper": "ICLR_Generalised_Moments-10.pdf",
+  "paper_sha256": "870cda856fa3c758e058709b00033578652d9fbd15b1c14777dbff29ee964763",
+  "installation": "python -m pip install -e '.[dev]'",
+  "optional_raw_data_dependencies": "python -m pip install -e '.[observations,single-cell]'",
+  "prepare": "python scripts/run_paper.py prepare",
+  "methods": [
+    "cfm",
+    "mfm",
+    "csb",
+    "lin",
+    "land"
+  ],
+  "seeds": [
+    3,
+    7,
+    11,
+    13,
+    17
+  ],
+  "multi_settings": [
+    "constraint_day3_eval_day4",
+    "constraint_day4_eval_day3"
+  ],
+  "all_main_tables": "python scripts/paper_suite.py --suite main --out outputs/paper/main --execute",
+  "report": "python scripts/report_paper.py --root outputs/paper/main",
+  "tests": "python -m pytest -q",
+  "smoke": "python scripts/run_paper.py train --benchmark synthetic --method lin --smoke --out outputs/smoke/synthetic",
+  "entries": [
+    {
+      "paper": "Table 2",
+      "benchmark": "synthetic",
+      "configs": "configs/paper/synthetic",
+      "inputs": "benchmark_data/synthetic",
+      "train": "python scripts/run_paper.py train --benchmark synthetic --method lin --seed 3 --out outputs/paper/synthetic/lin/seed_3",
+      "evaluate": "python scripts/run_paper.py evaluate --out outputs/paper/synthetic/lin/seed_3"
+    },
+    {
+      "paper": "Table 3",
+      "benchmark": "aerosol",
+      "configs": "configs/paper/aerosol",
+      "inputs": "benchmark_data/aerosol",
+      "train": "python scripts/run_paper.py train --benchmark aerosol --method lin --seed 3 --out outputs/paper/aerosol/lin/seed_3",
+      "evaluate": "python scripts/run_paper.py evaluate --out outputs/paper/aerosol/lin/seed_3"
+    },
+    {
+      "paper": "Table 4",
+      "benchmark": "multi",
+      "configs": "configs/paper/multi",
+      "inputs": "benchmark_data/multi",
+      "train": "python scripts/run_paper.py train --benchmark multi --method lin --seed 3 --out outputs/paper/multi/lin/seed_3",
+      "evaluate": "python scripts/run_paper.py evaluate --out outputs/paper/multi/lin/seed_3"
+    },
+    {
+      "paper": "Table 5",
+      "benchmark": "semrau",
+      "configs": "configs/paper/semrau",
+      "inputs": "benchmark_data/semrau",
+      "train": "python scripts/run_paper.py train --benchmark semrau --method lin --seed 3 --out outputs/paper/semrau/lin/seed_3",
+      "evaluate": "python scripts/run_paper.py evaluate --out outputs/paper/semrau/lin/seed_3"
+    },
+    {
+      "paper": "Table 6",
+      "suite": "complementary",
+      "commands": "python scripts/paper_suite.py --suite complementary --out outputs/paper/complementary",
+      "execute": "Append --execute to run the full fixed budgets; listing commands does not train."
+    },
+    {
+      "paper": "Table 7",
+      "suite": "redundant",
+      "commands": "python scripts/paper_suite.py --suite redundant --out outputs/paper/redundant",
+      "execute": "Append --execute to run the full fixed budgets; listing commands does not train."
+    },
+    {
+      "paper": "Table 8",
+      "suite": "scarce",
+      "commands": "python scripts/paper_suite.py --suite scarce --out outputs/paper/scarce",
+      "execute": "Append --execute to run the full fixed budgets; listing commands does not train."
+    },
+    {
+      "paper": "Table 9",
+      "suite": "runtime",
+      "commands": "python scripts/paper_suite.py --suite runtime --out outputs/paper/runtime",
+      "execute": "Append --execute to run the full fixed budgets; listing commands does not train."
+    },
+    {
+      "paper": "Figure 1",
+      "suite": "noise",
+      "commands": "python scripts/paper_suite.py --suite noise --out outputs/paper/noise"
+    },
+    {
+      "paper": "Figure 2",
+      "command": "python scripts/export_bridge_dataset_figure.py --help"
+    }
+  ],
+  "reproducibility": {
+    "inputs": "Versioned endpoint arrays, couplings, aggregate targets and observation classifiers; checksums in benchmark_data/manifest.json. The prepare command verifies them.",
+    "preprocessing": "Raw-data commands apply the fixed preprocessing rules and recompute aggregate targets. Multi uses the public PCA100 representation and bundled observation classifiers.",
+    "outputs": "Configuration, input hashes, library versions, checkpoints, update counts and evaluation metrics are written to the selected output directory.",
+    "stages": "Stage A learns the path; Stage B fits its velocity field with the path frozen.",
+    "selection": "Multi uses the reciprocal other day as W2 validation. Semrau selects the minimum eligible EMA endpoint36h validation-W2 checkpoint over 18000 updates.",
+    "budgets": "The supplied configurations define the paper budgets and selection rules. Smoke runs check execution and are excluded from scientific reports.",
+    "aerosol": "June1 hyy_test_00, RK4 with 400 steps and four-times population quadrature.",
+    "synthetic": "Seeded endpoint pools and endpoint-only OT; MFM A300, GMI A600, common B9600. GMI-linear uses beta=0.05.",
+    "multi": "The seven-output classifier is trained on constraint-day samples. Its empirical output mean supplies the aggregate constraint; LAND uses endpoints only. Reverse LAND includes a scalar clock.",
+    "semrau": "Bulk-calibrated marker moments. Calibration uses evaluation-day and endpoint-validation cells; reported scores are calibration-dependent evaluations.",
+    "scarce": "Five independent nested observation replicates. GMI/CSB use mean and unbiased Var(Y); MM uses full observed midpoint samples. Methods share random streams.",
+    "optical_noise": "Controlled error around a scalar computed from the midpoint histogram; endpoint-only LAND and fixed training seed3. This is an observation-error ablation.",
+    "runtime": "Wall-clock timings measure the current machine and software environment.",
+    "csb": "Multi uses fixed endpoint OT, a continuous sampled dual, and an independent sampling audit. CPU is the default; --device mps/cuda selects the sampler device."
+  },
+  "raw_preprocessing": {
+    "commands": "configs/preprocessing/usage.json",
+    "entrypoint": "python scripts/preprocess_data.py --help",
+    "scope": "Semrau GEO counts, aerosol EBAS measurements, and the public Mendeley Multi H5AD PCA100 dataset (DOI 10.17632/hhny5ff7yj.1), all with checked downloads. Synthetic inputs remain supplied in benchmark_data.",
+    "output": "datasets/prepared: use run_paper.py --data-root datasets/prepared before the train/evaluate subcommand."
+  },
+  "new_datasets": "See configs/preprocessing/usage.json for the custom-data template and input schema."
+}

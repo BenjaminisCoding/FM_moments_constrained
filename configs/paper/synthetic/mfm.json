@@ -1,0 +1,162 @@
+{
+  "experiment": {
+    "mode": "metric",
+    "run_both_modes": false,
+    "comparison_methods": [
+      "metric"
+    ],
+    "label": "bridge_arc_five_method_endpoint"
+  },
+  "data": {
+    "label": "bridge_arc_ot_global_3k",
+    "family": "bridge_sde",
+    "coupling": "ot_global",
+    "dim": 2,
+    "constraint_times": [
+      0.5
+    ],
+    "moment_feature_blocks": [
+      "mean",
+      "covariance"
+    ],
+    "moment_feature_params": {
+      "local_y_variance": {
+        "center_x": 1.0,
+        "width": 0.35
+      }
+    },
+    "target_mc_samples": 3000,
+    "target_cache_enabled": true,
+    "target_cache_dir": ".cache/bridge_targets",
+    "bridge": {
+      "n_steps": 200,
+      "total_time": 1.5,
+      "mean0": [
+        0.0,
+        0.0
+      ],
+      "cov0": [
+        [
+          0.35,
+          0.0
+        ],
+        [
+          0.0,
+          0.6
+        ]
+      ],
+      "vx": 2.0,
+      "sigma_x": 0.15,
+      "sigma_y": 0.45,
+      "bridge_center_x": 1.0,
+      "bridge_width": 0.35,
+      "bridge_pull": 8.0,
+      "bridge_diffusion_drop": 0.8,
+      "arc_y_amplitude": 0.8
+    },
+    "interpolant_eval_times": [
+      0.25,
+      0.5,
+      0.75
+    ]
+  },
+  "model": {
+    "activation": "silu",
+    "velocity_hidden_dims": [
+      128,
+      128
+    ],
+    "path_hidden_dims": [
+      128,
+      128
+    ],
+    "path_zero_init_output": false
+  },
+  "train": {
+    "label": "bridge_global_ot_3k_ab_only",
+    "init_seed": null,
+    "batch_seed": null,
+    "time_seed": null,
+    "stage_a_steps": 300,
+    "stage_b_steps": 9600,
+    "stage_c_steps": 0,
+    "batch_size": 256,
+    "eval_batch_size": 1024,
+    "eval_transport_samples": 4000,
+    "eval_transport_steps": 100,
+    "eval_intermediate_empirical_w2": true,
+    "eval_intermediate_ot_samples": 512,
+    "eval_empirical_w2_full_pool": false,
+    "eval_full_ot_metrics": false,
+    "eval_full_ot_method": "pot_emd2",
+    "eval_full_ot_num_itermax": null,
+    "eval_full_ot_max_variables": null,
+    "eval_full_ot_support_tol": 1e-12,
+    "stage_b_early_stopping_enabled": false,
+    "stage_b_early_stopping_check_every": 50,
+    "stage_b_early_stopping_warmup_steps": 300,
+    "stage_b_early_stopping_patience": 6,
+    "stage_b_early_stopping_min_delta": 0.0,
+    "stage_b_early_stopping_min_delta_rel": 0.001,
+    "stage_b_early_stopping_eval_batch_size": 1024,
+    "stage_b_early_stopping_eval_batches": 3,
+    "stage_b_early_stopping_restore_best": true,
+    "stage_b_early_stopping_seed": null,
+    "lr_g": 0.001,
+    "lr_v": 0.001,
+    "alpha": 1.0,
+    "beta": 0.05,
+    "beta_schedule": "constant",
+    "beta_drift_p": 1.0,
+    "beta_drift_eps": 1e-06,
+    "beta_min_scale": 0.3,
+    "beta_max_scale": 3.0,
+    "rho": 0.5,
+    "eta_joint": 0.05,
+    "lambda_clip": 100.0,
+    "moment_eta": 1.0,
+    "moment_block_normalization": "none",
+    "pseudo_eta": 0.0,
+    "pseudo_rho": 5.0,
+    "pseudo_lambda_clip": 100.0
+  },
+  "mfm": {
+    "backend": "native",
+    "sigma": 0.1,
+    "alpha": 1.0,
+    "moment_eta": 1.0,
+    "geopath_metric": "land",
+    "land_gamma": 0.125,
+    "land_rho": 0.001,
+    "land_metric_samples": 256,
+    "reference_pool_policy": "endpoints_only",
+    "rbf_n_centers": 100,
+    "rbf_kappa": 1.0,
+    "rbf_epsilon": 0.001,
+    "rbf_alpha_metric": 1.0,
+    "rbf_metric_epochs": 50,
+    "rbf_lr": 0.01,
+    "rbf_seed": 998
+  },
+  "curly": {
+    "path_alpha": 1.0,
+    "sigma": 0.0,
+    "velocity_scale": 1.0,
+    "reference_pool_policy": "endpoints_only",
+    "reference_pool_max_samples_per_time": null,
+    "reference_k": 20,
+    "cosine_weight": 1.0,
+    "l2_weight": 1.0,
+    "l2_mu_dot_scale": 1.0,
+    "moment_eta": 1.0,
+    "stage_b_coupling": "same",
+    "learned_coupling_num_times": 1,
+    "learned_coupling_chunk_size": 32
+  },
+  "device": "cpu",
+  "output": {
+    "save_checkpoint": true,
+    "save_plots": false,
+    "plot_pairs": 32
+  }
+}

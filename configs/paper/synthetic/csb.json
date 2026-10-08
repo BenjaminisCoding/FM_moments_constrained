@@ -1,0 +1,14 @@
+{
+  "dimension": 2,
+  "velocity_hidden_dims": [
+    128,
+    128
+  ],
+  "activation": "silu",
+  "batch_size": 256,
+  "regression_validation_samples": 8192,
+  "sigma": 0.5,
+  "learning_rate": 0.001,
+  "stage_b_steps": 9600,
+  "diagnostic_every": 600
+}
